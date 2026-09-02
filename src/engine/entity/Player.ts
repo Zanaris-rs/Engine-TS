@@ -72,6 +72,7 @@ import VarBitType from '#/cache/config/VarBitType.js';
 import FriendlistLoaded from '#/network/game/server/model/FriendlistLoaded.js';
 import UpdateIgnoreList from '#/network/game/server/model/UpdateIgnoreList.js';
 import Midi from '#/cache/midi/Midi.js';
+import Plugins from '#/plugins/Plugins.js'; // @plugin-hook
 
 const levelExperience = new Int32Array(99);
 
@@ -529,6 +530,7 @@ export default class Player extends PathingEntity {
 
         this.lastStepX = this.x - 1;
         this.lastStepZ = this.z;
+        Plugins.onLogin(this); // @plugin-hook
         this.isActive = true;
     }
 

@@ -100,6 +100,7 @@ import VarBitType from '#/cache/config/VarBitType.js';
 import FriendlistLoaded from '#/network/game/server/model/FriendlistLoaded.js';
 import HashTable from '#/datastruct/HashTable.js';
 import Midi from '#/cache/midi/Midi.js';
+import Plugins from '#/plugins/Plugins.js'; // @plugin-hook
 
 const priv = forge.pki.privateKeyFromPem(fs.readFileSync('data/config/private.pem', 'ascii'));
 
@@ -339,6 +340,7 @@ class World {
 
     cycle(): void {
         try {
+            Plugins.onCycle(this.currentTick); // @plugin-hook
             const start: number = Date.now();
             const drift: number = Math.max(0, start - this.nextTick);
 
