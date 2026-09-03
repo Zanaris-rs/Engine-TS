@@ -118,7 +118,10 @@ for (const entry of entries.filter(e => e.type === 'model')) {
         // rig labels are re-assigned per model between revisions, so an imported rigged model
         // animates into mangled limbs unless it has been re-labelled for this revision
         const which = [model.hasVertexLabels ? 'VSKIN' : '', model.hasFaceLabels ? 'TSKIN' : ''].filter(Boolean).join('+');
-        warn(`model "${entry.name}.ob2" is rigged (${which})`, 'if imported from another revision it must be re-labelled for 289 or it will animate wrongly - see content/PLUGINS.md');
+        warn(
+            `model "${entry.name}.ob2" is rigged (${which})`,
+            'if imported from another revision its labels belong to that revision - a full humanoid will deform, a model bound to few groups (a held weapon) often looks fine. See content/PLUGINS.md'
+        );
     }
 }
 
