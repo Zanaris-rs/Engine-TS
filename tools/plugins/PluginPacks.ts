@@ -35,11 +35,15 @@ export function listPlugins(): string[] {
         return [];
     }
 
-    return fs
-        .readdirSync(root, { withFileTypes: true })
-        .filter(entry => entry.isDirectory())
-        .map(entry => entry.name)
-        .sort();
+    return (
+        fs
+            .readdirSync(root, { withFileTypes: true })
+            .filter(entry => entry.isDirectory())
+            .map(entry => entry.name)
+            // _generated holds derived flags and dispatchers, not a plugin
+            .filter(name => !name.startsWith('_'))
+            .sort()
+    );
 }
 
 /**
@@ -56,7 +60,17 @@ export function readFragments(): PluginEntry[] {
             continue;
         }
 
-        const lines = fs.readFileSync(file, 'utf8').split('\n');
+        entries.push(...parseFragment(fs.readFileSync(file, 'utf8'), plugin, file));
+    }
+
+    return entries;
+}
+
+/** Split out so the parsing rules can be tested without a content tree. */
+export function parseFragment(text: string, plugin: string, file: string): PluginEntry[] {
+    const entries: PluginEntry[] = [];
+    {
+        const lines = text.split('\n');
 
         for (let i = 0; i < lines.length; i++) {
             const line = lines[i].split('#')[0].trim();

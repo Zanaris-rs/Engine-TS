@@ -1,5 +1,6 @@
 import fs from 'fs';
 
+import { write as generateContent } from '#tools/plugins/GenerateContent.js';
 import { listPlugins, findDrift, headroom, packPath, readFragments, upstreamRef } from '#tools/plugins/PluginPacks.js';
 
 const check = process.argv.includes('--check');
@@ -19,6 +20,16 @@ if (collisions.length > 0) {
     }
     console.error('\nRaise the affected bases in tools/plugins/PluginIds.ts, then re-run. See content/PLUGINS.md.');
     process.exit(1);
+}
+
+if (!check) {
+    const states = generateContent();
+    const on = states.filter(s => s.enabled);
+    const hooked = states.filter(s => s.hooks.length > 0);
+    console.log(`generated flags for ${states.length} plugin(s), ${on.length} enabled${hooked.length ? `, ${hooked.length} with hooks` : ''}`);
+    for (const s of states.filter(s => !s.enabled)) {
+        console.log(`  disabled: ${s.name}`);
+    }
 }
 
 const drift = findDrift(entries);

@@ -11,7 +11,7 @@
  * missing model, and the client's on-demand loop never requests a version-0 file. The cost is
  * memory for default config objects across the gap - roughly 13-15 MB for the bases below.
  */
-export const PLUGIN_PACK_TYPES = ['obj', 'loc', 'npc', 'model', 'seq', 'spotanim'] as const;
+export const PLUGIN_PACK_TYPES = ['obj', 'loc', 'npc', 'model', 'seq', 'spotanim', 'varp', 'varbit'] as const;
 
 export type PluginPackType = (typeof PLUGIN_PACK_TYPES)[number];
 
@@ -23,6 +23,17 @@ export const PLUGIN_ID_BASE: Record<PluginPackType, number> = {
 
     // loc has its own ceiling, so its base has to sit below it - see PLUGIN_ID_CEILING
     loc: 12000,
+
+    // varp is the tightest range after npc. The client stores live values in a fixed
+    // `int[2000]` (Client.java: `varps = new int[2000]`), so ids must stay under 2000 - the
+    // 16-bit wire field is not the limit. Upstream uses 393 at 289 and 724 at 377, so 1200
+    // clears the next revision while leaving 800 slots.
+    varp: 1200,
+
+    // varbit values are resolved to their varp before transmission, so there is no fixed client
+    // array - but upstream grows fast here (178 at 289, 2112 at 377), so the base has to sit
+    // well clear of that.
+    varbit: 4000,
 
     // npc is the exception. Npc type ids are packed into 11 bits by the player/npc info encoder
     // (`src/network/rsbuf/info.ts` -> `pbit(11, ntype)`), and `pbit` masks silently rather than
@@ -37,6 +48,12 @@ export const PLUGIN_ID_BASE: Record<PluginPackType, number> = {
  */
 export const PLUGIN_ID_CEILING: Record<PluginPackType, number> = {
     obj: 50000,
+
+    // hard client limit: values live in `int[2000]`, indexed by varp id
+    varp: 2000,
+
+    // no fixed client array; bounded only by the packer's index buffer
+    varbit: 50000,
     model: 50000,
     seq: 50000,
     spotanim: 50000,

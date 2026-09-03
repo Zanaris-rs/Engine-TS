@@ -23,6 +23,18 @@ const SEAM_MANIFEST: { file: string; markers: number; hint: string }[] = [
         file: 'src/engine/World.ts',
         markers: 2,
         hint: 'import Plugins, then `Plugins.onCycle(this.currentTick);` as the first line inside the try in cycle()'
+    },
+    {
+        // content seams: RuneScript triggers are single-owner, so core has to call the generated
+        // dispatcher for plugins to react to login or logout at all
+        file: '../content/scripts/login_logout/login.rs2',
+        markers: 1,
+        hint: '`~plugin_login;` in [login,_], ABOVE the tutorial branch - that branch ends in @start_tutorial, a tail jump, so anything after it never runs for new players'
+    },
+    {
+        file: '../content/scripts/login_logout/logout.rs2',
+        markers: 1,
+        hint: '`~plugin_logout;` at the end of [logout,_]'
     }
 ];
 

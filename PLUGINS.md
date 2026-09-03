@@ -111,6 +111,16 @@ the reserved base first. Ids below the base are never touched, so it cannot dama
 | `tools/plugins/SyncPluginPacks.ts` | fragments → `content/pack/*.pack` (`--check` for CI) |
 | `tools/plugins/VerifyPluginPacks.ts` | id ranges, duplicates, upstream name clashes, orphan models, `build.verify` |
 | `tools/plugins/import/FromLostCityRev.ts` | copy a model out of another revision branch and allocate it an id |
+| `tools/plugins/GenerateContent.ts` | generates the enabled-flag constants and the hook dispatchers |
+| `tools/plugins/Ob2.ts` | reads model headers, to spot rigged imports |
+| `tools/plugins/*.test.ts` | `npx tsx --test tools/plugins/*.test.ts` |
+
+The tests are drift detectors rather than unit tests. Each id ceiling is a field width or array
+bound somewhere in the engine or client, and every one truncates silently, so the tests re-derive
+them from that source: if `Loc` stops masking to 14 bits, or the npc field widens, or the client's
+varp array is resized, they fail rather than letting content be placed under the wrong id. The
+`.ob2` reader is checked against all ~5,000 models in the content tree, which is the only
+convincing test of a hand-written binary layout.
 
 ```sh
 npx tsx tools/plugins/SyncPluginPacks.ts
