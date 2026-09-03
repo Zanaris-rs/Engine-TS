@@ -91,3 +91,32 @@ npm run lint
 Keep the seam edits in a single commit, separate from commits that add `src/plugins/**`. If a seam
 conflicts, take upstream's version of the surrounding code and re-add the two marked lines from the
 manifest above.
+
+## Content plugins
+
+Optional *content* (items, npcs, scenery and their models) is packaged the same way, but the
+constraint is different: content has no seams to protect, it has **ids**. Those live in shared,
+git-tracked pack files (`content/pack/*.pack`) that cannot sit inside a plugin folder, and cannot
+even be annotated — `PackFile.save()` re-emits only sorted `id=name` lines, stripping comments on
+every repack.
+
+So the pack files become *derived*. Each plugin declares its ids in its own `plugin.pack` fragment
+and the tooling here regenerates the pack files from all fragments, dropping everything at or above
+the reserved base first. Ids below the base are never touched, so it cannot damage upstream data.
+
+| tool | purpose |
+| --- | --- |
+| `tools/plugins/PluginIds.ts` | reserved id bases and protocol ceilings |
+| `tools/plugins/PluginPacks.ts` | fragment parsing and pack rebuilding, shared by the CLIs |
+| `tools/plugins/SyncPluginPacks.ts` | fragments → `content/pack/*.pack` (`--check` for CI) |
+| `tools/plugins/VerifyPluginPacks.ts` | id ranges, duplicates, upstream name clashes, orphan models, `build.verify` |
+| `tools/plugins/import/FromLostCityRev.ts` | copy a model out of another revision branch and allocate it an id |
+
+```sh
+npx tsx tools/plugins/SyncPluginPacks.ts
+npx tsx tools/plugins/VerifyPluginPacks.ts
+npm run build
+```
+
+Full documentation, including the id table, the asset-import routes and the gotchas, is in
+`content/PLUGINS.md`.
