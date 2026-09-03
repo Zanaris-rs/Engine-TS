@@ -17,10 +17,12 @@ export type PluginPackType = (typeof PLUGIN_PACK_TYPES)[number];
 
 export const PLUGIN_ID_BASE: Record<PluginPackType, number> = {
     obj: 20000,
-    loc: 20000,
     model: 20000,
     seq: 20000,
     spotanim: 20000,
+
+    // loc has its own ceiling, so its base has to sit below it - see PLUGIN_ID_CEILING
+    loc: 12000,
 
     // npc is the exception. Npc type ids are packed into 11 bits by the player/npc info encoder
     // (`src/network/rsbuf/info.ts` -> `pbit(11, ntype)`), and `pbit` masks silently rather than
@@ -35,12 +37,17 @@ export const PLUGIN_ID_BASE: Record<PluginPackType, number> = {
  */
 export const PLUGIN_ID_CEILING: Record<PluginPackType, number> = {
     obj: 50000,
-    loc: 50000,
     model: 50000,
     seq: 50000,
     spotanim: 50000,
 
-    // 11-bit protocol limit, not a buffer limit - this one is hard.
+    // Loc packs type, shape, angle and layer into a single int and gives the type 14 bits
+    // (`src/engine/entity/Loc.ts` -> `(type & 0x3fff) | ...`). The getter masks on the way back
+    // out, so a loc above 16383 is placed silently as `id & 0x3fff` - a completely different
+    // loc - and loc_find can never see it.
+    loc: 16384,
+
+    // 11-bit protocol limit in the info encoder, and pbit masks silently too.
     npc: 2048
 };
 
