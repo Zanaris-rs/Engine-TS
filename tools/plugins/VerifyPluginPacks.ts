@@ -4,9 +4,11 @@ import path from 'path';
 import Environment from '#/util/Environment.js';
 import { PackFile } from '#tools/pack/PackFileBase.js';
 import { PLUGIN_ID_BASE, PLUGIN_ID_CEILING, PLUGIN_PACK_TYPES } from '#tools/plugins/PluginIds.js';
+import { readOb2 } from '#tools/plugins/Ob2.js';
 import { PluginEntry, findDrift, listPlugins, modelsRoot, readFragments } from '#tools/plugins/PluginPacks.js';
 
 let failed = false;
+let warnings = 0;
 
 function fail(message: string, detail?: string) {
     console.error(`FAIL  ${message}`);
@@ -18,6 +20,14 @@ function fail(message: string, detail?: string) {
 
 function ok(message: string) {
     console.log(`ok    ${message}`);
+}
+
+function warn(message: string, detail?: string) {
+    console.warn(`WARN  ${message}`);
+    if (detail) {
+        console.warn(`      ${detail}`);
+    }
+    warnings++;
 }
 
 function where(entry: PluginEntry): string {
@@ -97,6 +107,18 @@ for (const entry of entries.filter(e => e.type === 'model')) {
     const file = path.join(modelsRoot(), entry.plugin, `${entry.name}.ob2`);
     if (!fs.existsSync(file)) {
         fail(`model "${entry.name}" has no file`, `${where(entry)} - expected ${path.relative(process.cwd(), file)}`);
+        continue;
+    }
+
+    const model = readOb2(fs.readFileSync(file));
+
+    if (!model.wellFormed) {
+        fail(`model "${entry.name}.ob2" does not parse as an .ob2`, `body is ${model.actualLength} bytes, header describes ${model.expectedLength}`);
+    } else if (model.rigged) {
+        // rig labels are re-assigned per model between revisions, so an imported rigged model
+        // animates into mangled limbs unless it has been re-labelled for this revision
+        const which = [model.hasVertexLabels ? 'VSKIN' : '', model.hasFaceLabels ? 'TSKIN' : ''].filter(Boolean).join('+');
+        warn(`model "${entry.name}.ob2" is rigged (${which})`, 'if imported from another revision it must be re-labelled for 289 or it will animate wrongly - see content/PLUGINS.md');
     }
 }
 
@@ -128,6 +150,8 @@ if (Environment.build.verify) {
 if (failed) {
     console.error('\nPlugin pack verification failed. See content/PLUGINS.md.');
     process.exitCode = 1;
+} else if (warnings > 0) {
+    console.log(`\nAll checks passed for ${plugins.length} plugin(s), with ${warnings} warning(s).`);
 } else {
     console.log(`\nAll checks passed for ${plugins.length} plugin(s).`);
 }

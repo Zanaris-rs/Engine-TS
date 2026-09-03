@@ -3,6 +3,7 @@ import fs from 'fs';
 import path from 'path';
 
 import Environment from '#/util/Environment.js';
+import { readOb2 } from '#tools/plugins/Ob2.js';
 import { PLUGIN_ID_BASE } from '#tools/plugins/PluginIds.js';
 import { pluginsRoot, modelsRoot, readFragments } from '#tools/plugins/PluginPacks.js';
 
@@ -77,5 +78,17 @@ if (already) {
 }
 
 console.log(`wrote ${path.relative(process.cwd(), target)} (${blob.length} bytes)`);
+
+const info = readOb2(blob);
+
+if (!info.wellFormed) {
+    console.error(`\nWARNING: ${name}.ob2 does not parse as an .ob2 (body ${info.actualLength} bytes, header describes ${info.expectedLength}).`);
+} else if (info.rigged) {
+    // geometry, colours and face indices are identical across revisions; rig labels are not
+    const which = [info.hasVertexLabels ? 'VSKIN' : '', info.hasFaceLabels ? 'TSKIN' : ''].filter(Boolean).join('+');
+    console.warn(`\nWARNING: this model is RIGGED (${which}).`);
+    console.warn('Rig labels are re-assigned per model between revisions, so animating it with this');
+    console.warn("revision's seqs will mangle it. Re-label it for 289 before use - see content/PLUGINS.md.");
+}
 console.log('\nnext: reference it from the plugin config, then run');
 console.log('  npx tsx tools/plugins/SyncPluginPacks.ts && npx tsx tools/plugins/VerifyPluginPacks.ts');
