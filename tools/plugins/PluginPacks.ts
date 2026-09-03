@@ -1,9 +1,10 @@
+import { execFileSync } from 'child_process';
 import fs from 'fs';
 import path from 'path';
 
 import Environment from '#/util/Environment.js';
 import { PackFile } from '#tools/pack/PackFileBase.js';
-import { PLUGIN_ID_BASE, PLUGIN_PACK_TYPES, PluginPackType, isPluginPackType } from '#tools/plugins/PluginIds.js';
+import { PLUGIN_ID_BASE, PLUGIN_ID_CEILING, PLUGIN_PACK_TYPES, PluginPackType, isPluginPackType } from '#tools/plugins/PluginIds.js';
 
 /** One declared id from a plugin's `plugin.pack` fragment. */
 export type PluginEntry = {
@@ -146,4 +147,70 @@ export function findDrift(entries: PluginEntry[]): PackDrift[] {
     }
 
     return drift;
+}
+
+export type Headroom = {
+    type: PluginPackType;
+    base: number;
+    ceiling: number;
+    /** Highest id upstream uses at this revision, or null if we could not read it. */
+    upstreamMax: number | null;
+    /** Ids between upstream's highest and our base. Negative means they overlap. */
+    clearance: number | null;
+    slots: number;
+};
+
+/** The upstream branch for the revision we are building, e.g. `upstream/289`. */
+export function upstreamRef(): string {
+    return `upstream/${Environment.engine.revision}`;
+}
+
+/**
+ * How much room is left between upstream's content and each plugin base.
+ *
+ * This is the invariant the whole scheme rests on. SyncPluginPacks rebuilds a pack by deleting
+ * every id at or above the base and re-registering the declared ones, which is only safe while
+ * the base sits above everything upstream uses. A revision bump can quietly break that - at
+ * revision 377 upstream locs reach 14973, well past a base of 12000 - and the sync would then
+ * delete thousands of upstream entries and still build cleanly.
+ *
+ * Read from the upstream branch rather than the working pack, because the working pack has
+ * already had our ids merged into it and cannot answer the question.
+ */
+export function headroom(): Headroom[] {
+    const contentDir = path.resolve(Environment.build.srcDir);
+    const ref = upstreamRef();
+
+    return PLUGIN_PACK_TYPES.map(type => {
+        const base = PLUGIN_ID_BASE[type];
+        const ceiling = PLUGIN_ID_CEILING[type];
+        let upstreamMax: number | null = null;
+
+        try {
+            const raw = execFileSync('git', ['show', `${ref}:pack/${type}.pack`], {
+                cwd: contentDir,
+                encoding: 'utf8',
+                maxBuffer: 32 * 1024 * 1024,
+                stdio: ['ignore', 'pipe', 'ignore']
+            });
+
+            for (const line of raw.split('\n')) {
+                const id = parseInt(line, 10);
+                if (Number.isInteger(id) && line.includes('=')) {
+                    upstreamMax = upstreamMax === null ? id : Math.max(upstreamMax, id);
+                }
+            }
+        } catch {
+            // ref not fetched, or the pack does not exist at that revision
+        }
+
+        return {
+            type,
+            base,
+            ceiling,
+            upstreamMax,
+            clearance: upstreamMax === null ? null : base - upstreamMax - 1,
+            slots: ceiling - base
+        };
+    });
 }

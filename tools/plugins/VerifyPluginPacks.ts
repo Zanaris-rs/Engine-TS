@@ -5,7 +5,7 @@ import Environment from '#/util/Environment.js';
 import { PackFile } from '#tools/pack/PackFileBase.js';
 import { PLUGIN_ID_BASE, PLUGIN_ID_CEILING, PLUGIN_PACK_TYPES } from '#tools/plugins/PluginIds.js';
 import { readOb2 } from '#tools/plugins/Ob2.js';
-import { PluginEntry, findDrift, listPlugins, modelsRoot, readFragments } from '#tools/plugins/PluginPacks.js';
+import { PluginEntry, findDrift, headroom, listPlugins, modelsRoot, readFragments, upstreamRef } from '#tools/plugins/PluginPacks.js';
 
 let failed = false;
 let warnings = 0;
@@ -141,6 +141,31 @@ if (fs.existsSync(modelsRoot())) {
 }
 if (!failed) {
     ok(`${declaredModels.size} model file(s) match their declarations`);
+}
+
+// 6b: upstream must still sit below every plugin base. Sync rebuilds a pack by deleting
+// everything at or above the base, so if a revision bump moves upstream content into that
+// range the sync would delete it - silently, and the build would still pass.
+let checkedHeadroom = false;
+for (const h of headroom()) {
+    if (h.upstreamMax === null) {
+        continue;
+    }
+
+    checkedHeadroom = true;
+
+    if (h.upstreamMax >= h.base) {
+        fail(
+            `${h.type}: upstream reaches id ${h.upstreamMax} at ${upstreamRef()}, at or above the plugin base ${h.base}`,
+            `syncing would DELETE upstream entries in that range - raise ${h.type} in tools/plugins/PluginIds.ts above ${h.upstreamMax}` +
+                (h.upstreamMax >= h.ceiling - 1 ? `, but the ceiling is ${h.ceiling}, so this revision has outgrown the range entirely` : '')
+        );
+    } else if (h.clearance !== null && h.clearance < 256) {
+        warn(`${h.type}: only ${h.clearance} ids between upstream's ${h.upstreamMax} and the base ${h.base}`, 'a revision bump will likely push upstream into the plugin range');
+    }
+}
+if (checkedHeadroom && !failed) {
+    ok(`plugin ranges clear of upstream at ${upstreamRef()}`);
 }
 
 // 7: adding any transmitted config fails the packer's CRC gate unless verify is off
