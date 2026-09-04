@@ -4,6 +4,7 @@ import fsp from 'fs/promises';
 import * as bcrypt from 'bcrypt-ts';
 import { WebSocket, WebSocketServer } from 'ws';
 
+import { fromDbDate } from '#/db/DateFormat.js';
 import { db, toDbDate } from '#/db/query.js';
 import { PlayerLoading } from '#/engine/entity/PlayerLoading.js';
 import Packet from '#/io/Packet.js';
@@ -112,14 +113,16 @@ export default class LoginServer {
 
                             let account = await loadAccount(username, profile);
 
-                            if (!Environment.website.registration && !account) {
+                            if (Environment.account.autoCreate && !account) {
                                 // register the user automatically
                                 //
                                 // no insertId gate: kysely's postgres driver never sets one, and
-                                // this is the only registration path on a world with the website
-                                // gate off - a missing insertId would hang every new player with
-                                // no reply at all. executeTakeFirstOrThrow surfaces a real failure
-                                // to the catch below instead.
+                                // where this path is enabled it is the only way to get an account
+                                // at all - a missing insertId would hang every new player with no
+                                // reply. executeTakeFirstOrThrow surfaces a real failure to the
+                                // catch below instead.
+                                //
+                                // email is NOT NULL, and nothing here can ask for one.
                                 await db
                                     .insertInto('account')
                                     .values({
@@ -146,8 +149,20 @@ export default class LoginServer {
                                 return;
                             }
 
-                            if (account.banned_until !== null && new Date(account.banned_until) > new Date()) {
+                            if (account.banned_until !== null && fromDbDate(account.banned_until) > new Date()) {
                                 // account disabled
+                                s.send(
+                                    JSON.stringify({
+                                        replyTo,
+                                        response: 5
+                                    })
+                                );
+                                return;
+                            }
+
+                            if (account.playable_after !== null && fromDbDate(account.playable_after) > new Date()) {
+                                // still soaking after signup - the same reply as a ban,
+                                // because the client has no other "not yet" response
                                 s.send(
                                     JSON.stringify({
                                         replyTo,
@@ -230,7 +245,7 @@ export default class LoginServer {
                                 );
                                 return;
                             } else if (account.staffmodlevel < 2 && account.logged_out !== 0 && account.logged_out !== nodeId && account.logout_time !== null) {
-                                const remaining = new Date(account.logout_time).getTime() - new Date(Date.now() - Environment.node.hopTime).getTime();
+                                const remaining = fromDbDate(account.logout_time).getTime() - (Date.now() - Environment.node.hopTime);
                                 if (remaining > 0) {
                                     // rate limited (hop timer)
                                     s.send(

@@ -5,8 +5,13 @@ import { tryParseBoolean, tryParseInt, tryParseString } from '#/util/TryParse.js
 
 export interface WorldConfig {
     easyStartup: boolean;
-    website: {
-        registration: boolean;
+    account: {
+        /**
+         * Create an account for any unknown username typed at the login screen.
+         * Off by default: a world with a website in front of it registers there,
+         * behind whatever gate the website runs.
+         */
+        autoCreate: boolean;
     };
     web: {
         port: number;
@@ -80,8 +85,8 @@ export function getWorldConfigPath() {
 export function createDefaultWorldConfig(): WorldConfig {
     return {
         easyStartup: false,
-        website: {
-            registration: true
+        account: {
+            autoCreate: false
         },
         web: {
             port: process.platform === 'win32' || process.platform === 'darwin' ? 80 : 8888,
@@ -187,6 +192,13 @@ export function normalizeWorldConfig(value: unknown): WorldConfig {
         config.db.verbose = tryParseBoolean((value.db as Record<string, unknown>).kyselyVerbose as string | boolean | undefined | null, config.db.verbose);
     }
 
+    // Legacy compatibility: website.registration was the inverse of account.autoCreate.
+    // Without this an existing dev world.json silently gains auto-registration.
+    if (isObject(value) && isObject(value.website) && !isObject(value.account)) {
+        const registration = tryParseBoolean((value.website as Record<string, unknown>).registration as string | boolean | undefined | null, !config.account.autoCreate);
+        config.account.autoCreate = !registration;
+    }
+
     return config;
 }
 
@@ -226,7 +238,8 @@ function migrateFromLegacyEnv(defaults: WorldConfig, env: Record<string, string>
     const config = structuredClone(defaults);
 
     config.easyStartup = tryParseBoolean(env.EASY_STARTUP, config.easyStartup);
-    config.website.registration = tryParseBoolean(env.WEBSITE_REGISTRATION, config.website.registration);
+    // WEBSITE_REGISTRATION meant "the website registers players", i.e. the inverse
+    config.account.autoCreate = !tryParseBoolean(env.WEBSITE_REGISTRATION, !config.account.autoCreate);
 
     config.web.port = tryParseInt(env.WEB_PORT, config.web.port);
     config.web.allowedOrigin = tryParseString(env.WEB_ALLOWED_ORIGIN, config.web.allowedOrigin);

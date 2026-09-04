@@ -1,5 +1,6 @@
 import type { Selectable } from 'kysely';
 
+import { fromDbDate } from '#/db/DateFormat.js';
 import { db, toDbDate } from '#/db/query.js';
 import type { account } from '#/db/types.js';
 import type Player from '#/engine/entity/Player.js';
@@ -80,7 +81,7 @@ export async function updateHiscores(account: HiscoreAccount | undefined, player
         return;
     }
 
-    if (account.banned_until !== null && new Date(account.banned_until) >= new Date()) {
+    if (account.banned_until !== null && fromDbDate(account.banned_until) >= new Date()) {
         return;
     }
 

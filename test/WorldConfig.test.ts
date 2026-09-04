@@ -51,6 +51,20 @@ test('db.url defaults to an empty string so mergeConfig can coerce it', () => {
     assert.equal(normalizeWorldConfig({ db: { backend: 'postgres', url: 'postgresql://x/y' } }).db.url, 'postgresql://x/y');
 });
 
+test('account.autoCreate is off unless a world.json asks for it', () => {
+    assert.equal(createDefaultWorldConfig().account.autoCreate, false);
+    assert.equal(normalizeWorldConfig({}).account.autoCreate, false);
+    assert.equal(normalizeWorldConfig({ account: { autoCreate: true } }).account.autoCreate, true);
+});
+
+test('the legacy website.registration key is carried over, inverted', () => {
+    // registration: false meant "do not register on the website", i.e. in-game
+    assert.equal(normalizeWorldConfig({ website: { registration: false } }).account.autoCreate, true);
+    assert.equal(normalizeWorldConfig({ website: { registration: true } }).account.autoCreate, false);
+    // an explicit account block always wins
+    assert.equal(normalizeWorldConfig({ website: { registration: false }, account: { autoCreate: false } }).account.autoCreate, false);
+});
+
 test('normalizeWorldConfig drops keys that are not part of the schema', () => {
     const config = normalizeWorldConfig({ db: { backend: 'postgres' }, nonsense: true });
 

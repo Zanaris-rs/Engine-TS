@@ -614,7 +614,7 @@
                 label = 'Local development';
             } else if (preset === 'full-stack-dev') {
                 label = 'Full-stack development';
-                next.website.registration = false;
+                next.account.autoCreate = true;
                 next.node.production = false;
                 next.node.debug = true;
                 setLocalSupportServers(next);
@@ -633,7 +633,7 @@
                 next.node.xpRate = 1;
                 next.node.members = true;
                 next.db.backend = 'sqlite';
-                next.website.registration = false;
+                next.account.autoCreate = true;
                 setLocalSupportServers(next);
                 next.easyStartup = true;
             } else if (preset === 'multi-world') {
@@ -645,7 +645,7 @@
                 next.node.members = true;
                 setMysqlDefaults(next);
                 setLocalSupportServers(next);
-                next.website.registration = false;
+                next.account.autoCreate = true;
                 next.easyStartup = false;
             } else {
                 return;
