@@ -3,7 +3,6 @@ import { Worker } from 'worker_threads';
 
 import { collectDefaultMetrics, register } from 'prom-client';
 
-import { packAll } from '#tools/pack/PackAll.js';
 import World from '#/engine/World.js';
 import TcpServer from '#/server/tcp/TcpServer.js';
 import Environment from '#/util/Environment.js';
@@ -13,6 +12,8 @@ import OnDemand from '#/engine/OnDemand.js';
 
 if (OnDemand.cache.count(0) !== 9 || OnDemand.cache.count(2) === 0 || !fs.existsSync('data/pack/server/script.dat')) {
     printInfo('Packing cache, please wait until you see the world is ready.');
+
+    const { packAll } = await import('#tools/pack/PackAll.js');
 
     try {
         // todo: different logic so the main thread doesn't have to load pack files
