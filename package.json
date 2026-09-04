@@ -17,6 +17,7 @@
     "db:migrate": "tsx tools/server/prisma-multi.ts migrate deploy",
     "db:reset": "tsx tools/server/prisma-multi.ts migrate reset --force",
     "db:schema": "tsx tools/server/prisma-multi.ts migrate dev",
+    "db:smoke": "tsx tools/server/db-smoke.ts",
     "db:types": "prisma generate --schema prisma/postgres/schema.prisma",
     "dev": "tsx watch src/app.ts",
     "friend": "tsx src/friend.ts",
