@@ -43,6 +43,28 @@ This page reads and writes `data/config/world.json` through the management serve
 You can use the original obfuscated compiled applet from this time period with these arguments: `java -cp runescape.jar client 10 0 highmem members 32`  
 Be aware it may have compatibility issues (that are addressed in the Client-Java repository).
 
+## Database
+
+`db.backend` in `data/config/world.json` selects `sqlite` (the default, a local
+file), `mysql`, or `postgres`.
+
+Postgres reads its connection string from `DATABASE_URL` if it is set, falling
+back to `db.url`. Prefer the environment variable: the setup UI round-trips the
+config through `PUT /setup/config`, so anything in `db.url` is written back into
+`world.json`.
+
+Leave `sslmode` out of the URL - pg lets URL parameters override the TLS options
+the engine sets, and the engine always verifies the certificate. Where the server
+presents a private root (Supabase's pooler does: `Supabase Root 2021 CA`, which
+is not in any system trust store), point `DATABASE_SSL_CA` at that CA in PEM
+form, e.g. `DATABASE_SSL_CA=/etc/lostcity/supabase-ca.crt`.
+
+Migrations are per backend: `npm run sqlite:migrate`, `npm run db:migrate`
+(mysql) and `npm run postgres:migrate`. The postgres migration also creates
+schemas, roles and grants, so it is never run automatically by the setup wizard.
+`npm run db:types` regenerates `src/db/types.ts`, which every backend shares, from
+`prisma/postgres/schema.prisma`.
+
 ## Dependencies
 
 - [Node.js 24+](https://nodejs.org)
