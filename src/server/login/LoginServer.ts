@@ -9,6 +9,7 @@ import { db, toDbDate } from '#/db/query.js';
 import { PlayerLoading } from '#/engine/entity/PlayerLoading.js';
 import Packet from '#/io/Packet.js';
 import { updateHiscores } from '#/server/login/Hiscores.js';
+import { loginRetryReplyTo } from '#/server/login/LoginMessage.js';
 import Environment from '#/util/Environment.js';
 import { toSafeName } from '#/util/JString.js';
 import { printInfo } from '#/util/Logger.js';
@@ -69,8 +70,21 @@ export default class LoginServer {
 
         this.server.on('connection', (s: WebSocket) => {
             s.on('message', async (data: Buffer) => {
+                let parsed: unknown;
+                let replied = false;
+
+                // every reply in the player_login branch goes through this, so the
+                // catch below can tell "threw before answering" from "answered, then
+                // threw" - sending a second payload for a replyTo the world has
+                // already resolved would overwrite a successful login with a failure
+                const sendReply = (payload: object) => {
+                    replied = true;
+                    s.send(JSON.stringify(payload));
+                };
+
                 try {
                     const msg = JSON.parse(data.toString());
+                    parsed = msg;
                     const { type, nodeId, nodeTime, profile } = msg;
 
                     if (type === 'world_startup') {
@@ -88,12 +102,10 @@ export default class LoginServer {
                         const safeName = toSafeName(username);
 
                         if (this.loginRequests.has(safeName)) {
-                            s.send(
-                                JSON.stringify({
-                                    replyTo,
-                                    response: 8
-                                })
-                            );
+                            sendReply({
+                                replyTo,
+                                response: 8
+                            });
                             return;
                         }
                         this.loginRequests.add(safeName);
@@ -102,12 +114,10 @@ export default class LoginServer {
                             const ipBan = await db.selectFrom('ipban').selectAll().where('ip', '=', remoteAddress).executeTakeFirst();
 
                             if (ipBan) {
-                                s.send(
-                                    JSON.stringify({
-                                        replyTo,
-                                        response: 7
-                                    })
-                                );
+                                sendReply({
+                                    replyTo,
+                                    response: 7
+                                });
                                 return;
                             }
 
@@ -140,35 +150,29 @@ export default class LoginServer {
 
                             if (!account || !(await bcrypt.compare(password.toLowerCase(), account.password))) {
                                 // invalid username or password
-                                s.send(
-                                    JSON.stringify({
-                                        replyTo,
-                                        response: 1
-                                    })
-                                );
+                                sendReply({
+                                    replyTo,
+                                    response: 1
+                                });
                                 return;
                             }
 
                             if (account.banned_until !== null && fromDbDate(account.banned_until) > new Date()) {
                                 // account disabled
-                                s.send(
-                                    JSON.stringify({
-                                        replyTo,
-                                        response: 5
-                                    })
-                                );
+                                sendReply({
+                                    replyTo,
+                                    response: 5
+                                });
                                 return;
                             }
 
                             if (account.playable_after !== null && fromDbDate(account.playable_after) > new Date()) {
                                 // still soaking after signup - the same reply as a ban,
                                 // because the client has no other "not yet" response
-                                s.send(
-                                    JSON.stringify({
-                                        replyTo,
-                                        response: 5
-                                    })
-                                );
+                                sendReply({
+                                    replyTo,
+                                    response: 5
+                                });
                                 return;
                             }
 
@@ -178,12 +182,10 @@ export default class LoginServer {
                                     await db.updateTable('account').where('id', '=', account.id).set('members', true).executeTakeFirstOrThrow();
                                     account.members = true;
                                 } else {
-                                    s.send(
-                                        JSON.stringify({
-                                            replyTo,
-                                            response: 9
-                                        })
-                                    );
+                                    sendReply({
+                                        replyTo,
+                                        response: 9
+                                    });
                                     return;
                                 }
                             }
@@ -207,54 +209,46 @@ export default class LoginServer {
                                     if (!save || !PlayerLoading.verify(new Packet(save))) {
                                         // Extreme safety check for savefile existing but having bad data on read:
                                         console.error('on reconnect, account_id %s had invalid save data on disk', account.id);
-                                        this.rejectLoginForSafety(s, replyTo);
+                                        sendReply({ replyTo, response: 7 });
                                     }
-                                    s.send(
-                                        JSON.stringify({
-                                            replyTo,
-                                            response: 2,
-                                            account_id: account.id,
-                                            staffmodlevel: account.staffmodlevel,
-                                            muted_until: account.muted_until,
-                                            save: save.toString('base64'),
-                                            members: account.members,
-                                            messageCount: 0
-                                        })
-                                    );
+                                    sendReply({
+                                        replyTo,
+                                        response: 2,
+                                        account_id: account.id,
+                                        staffmodlevel: account.staffmodlevel,
+                                        muted_until: account.muted_until,
+                                        save: save.toString('base64'),
+                                        members: account.members,
+                                        messageCount: 0
+                                    });
                                 } else {
-                                    s.send(
-                                        JSON.stringify({
-                                            replyTo,
-                                            response: 2,
-                                            account_id: account.id,
-                                            staffmodlevel: account.staffmodlevel,
-                                            muted_until: account.muted_until,
-                                            members: account.members,
-                                            messageCount: 0
-                                        })
-                                    );
+                                    sendReply({
+                                        replyTo,
+                                        response: 2,
+                                        account_id: account.id,
+                                        staffmodlevel: account.staffmodlevel,
+                                        muted_until: account.muted_until,
+                                        members: account.members,
+                                        messageCount: 0
+                                    });
                                 }
                                 return;
                             } else if (account.logged_in !== null && account.logged_in !== 0) {
                                 // already logged in elsewhere
-                                s.send(
-                                    JSON.stringify({
-                                        replyTo,
-                                        response: 3
-                                    })
-                                );
+                                sendReply({
+                                    replyTo,
+                                    response: 3
+                                });
                                 return;
                             } else if (account.staffmodlevel < 2 && account.logged_out !== 0 && account.logged_out !== nodeId && account.logout_time !== null) {
                                 const remaining = fromDbDate(account.logout_time).getTime() - (Date.now() - Environment.node.hopTime);
                                 if (remaining > 0) {
                                     // rate limited (hop timer)
-                                    s.send(
-                                        JSON.stringify({
-                                            replyTo,
-                                            response: 10,
-                                            remaining
-                                        })
-                                    );
+                                    sendReply({
+                                        replyTo,
+                                        response: 10,
+                                        remaining
+                                    });
                                     return;
                                 }
                             }
@@ -277,40 +271,36 @@ export default class LoginServer {
                                 // ^ Only not an error if the user has never logged in before:
                                 if (account.logout_time !== null) {
                                     console.error('on login, account_id %s had no save data on disk!', account.id);
-                                    this.rejectLoginForSafety(s, replyTo);
+                                    sendReply({ replyTo, response: 7 });
                                     return;
                                 } else {
-                                    s.send(
-                                        JSON.stringify({
-                                            replyTo,
-                                            response: 4,
-                                            account_id: account.id,
-                                            staffmodlevel: account.staffmodlevel,
-                                            muted_until: account.muted_until,
-                                            messageCount: 0
-                                        })
-                                    );
+                                    sendReply({
+                                        replyTo,
+                                        response: 4,
+                                        account_id: account.id,
+                                        staffmodlevel: account.staffmodlevel,
+                                        muted_until: account.muted_until,
+                                        messageCount: 0
+                                    });
                                 }
                             } else {
                                 const save = await fsp.readFile(`data/players/${profile}/${username}.sav`);
                                 // Extreme safety check for savefile existing but having bad data on read:
                                 if (!save || !PlayerLoading.verify(new Packet(save))) {
                                     console.error('on login, account_id %s had invalid save data on disk!', account.id);
-                                    this.rejectLoginForSafety(s, replyTo);
+                                    sendReply({ replyTo, response: 7 });
                                     return;
                                 }
-                                s.send(
-                                    JSON.stringify({
-                                        replyTo,
-                                        response: 0,
-                                        account_id: account.id,
-                                        staffmodlevel: account.staffmodlevel,
-                                        save: save.toString('base64'),
-                                        muted_until: account.muted_until,
-                                        members: account.members,
-                                        messageCount: 0
-                                    })
-                                );
+                                sendReply({
+                                    replyTo,
+                                    response: 0,
+                                    account_id: account.id,
+                                    staffmodlevel: account.staffmodlevel,
+                                    save: save.toString('base64'),
+                                    muted_until: account.muted_until,
+                                    members: account.members,
+                                    messageCount: 0
+                                });
                             }
 
                             // Login is valid - update account table
@@ -438,6 +428,16 @@ export default class LoginServer {
                     }
                 } catch (err) {
                     console.error(err);
+
+                    // the world waits on player_login through fetchSync, which polls
+                    // for a reply and only gives up after ten seconds. Throwing
+                    // without answering turns any database hiccup into a ten second
+                    // stall and a generic client failure, so answer 'please try
+                    // again' immediately instead.
+                    const replyTo = replied ? null : loginRetryReplyTo(parsed);
+                    if (replyTo !== null) {
+                        this.rejectLoginForSafety(s, replyTo);
+                    }
                 }
             });
 
