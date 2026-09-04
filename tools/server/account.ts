@@ -15,7 +15,7 @@ import * as bcrypt from 'bcrypt-ts';
 import { db, toDbDate } from '#/db/query.js';
 import { checkPassword, checkUsername, ipGroup, isValidEmail, normalizeEmail } from '#/util/Account.js';
 import Environment from '#/util/Environment.js';
-import { toDisplayName } from '#/util/JString.js';
+import { toDisplayName, toSafeName } from '#/util/JString.js';
 
 const USAGE = `Usage:
   account.ts create-staff <name> <email> <password> [level] [--force]
@@ -36,7 +36,13 @@ function resolveUsername(input: string, force: boolean): string {
             fail(check.reserved ? `${check.reason} Pass --force if that is deliberate.` : check.reason);
         }
 
-        return input.toLowerCase().replaceAll(' ', '_');
+        // --force overrides the *reservation*, not the encoding. Lower-casing
+        // and swapping spaces by hand is not the same function the login
+        // protocol runs: base37 also drops trailing underscores, so `Mod_Ash_`
+        // would have been stored as `mod_ash_` and then never matched the
+        // `mod_ash` the client sends. toSafeName is the one the rest of the
+        // server agrees on, and it is what checkUsername already tested.
+        return toSafeName(input);
     }
 
     return check.username;
