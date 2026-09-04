@@ -10,11 +10,12 @@ export class LoginClient extends InternalClient {
         this.nodeId = nodeId;
     }
 
-    public async worldStartup() {
+    // returns true if the startup message reached the login server
+    public async worldStartup(): Promise<boolean> {
         await this.connect();
 
         if (!this.ws || !this.wsr || !this.wsr.checkIfWsLive()) {
-            return;
+            return false;
         }
 
         this.ws.send(
@@ -25,6 +26,8 @@ export class LoginClient extends InternalClient {
                 profile: Environment.node.profile
             })
         );
+
+        return true;
     }
 
     public async playerLogin(username: string, password: string, uid: number, socket: string, remoteAddress: string, reconnecting: boolean, hasSave: boolean) {
