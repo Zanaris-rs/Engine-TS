@@ -50,9 +50,8 @@ function fileExists(filePath: string): boolean {
     }
 }
 
-const fastify = Fastify({
-    // logger: true
-});
+// behind the reverse proxy, so req.ip resolves the real client address
+const fastify = Fastify({ trustProxy: 'loopback' });
 
 fastify.register(FastifyView, {
     engine: {
@@ -97,7 +96,7 @@ fastify.route({
                     socket.terminate();
                 }
             },
-            req.socket.remoteAddress ?? 'unknown'
+            req.ip
         );
 
         socket.on('message', (message: Buffer<ArrayBufferLike>) => {
