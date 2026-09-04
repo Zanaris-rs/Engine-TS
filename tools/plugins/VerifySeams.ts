@@ -35,6 +35,13 @@ const SEAM_MANIFEST: { file: string; markers: number; hint: string }[] = [
         file: '../content/scripts/login_logout/logout.rs2',
         markers: 1,
         hint: '`~plugin_logout;` at the end of [logout,_]'
+    },
+    {
+        // upstream's own CI builds against the upstream engine with the CRC gate on, which no
+        // longer matches once plugins add configs - by design
+        file: '../content/.github/workflows/content.yml',
+        markers: 3,
+        hint: 'point "Clone Engine" at the fork (repository + ref), and add a "Configure the build" step writing build.verify false'
     }
 ];
 
