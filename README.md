@@ -51,19 +51,54 @@ file), `mysql`, or `postgres`.
 Postgres reads its connection string from `DATABASE_URL` if it is set, falling
 back to `db.url`. Prefer the environment variable: the setup UI round-trips the
 config through `PUT /setup/config`, so anything in `db.url` is written back into
-`world.json`.
+`world.json`. If neither is set the server refuses to start rather than falling
+back to a localhost default.
 
-Leave `sslmode` out of the URL - pg lets URL parameters override the TLS options
-the engine sets, and the engine always verifies the certificate. Where the server
-presents a private root (Supabase's pooler does: `Supabase Root 2021 CA`, which
-is not in any system trust store), point `DATABASE_SSL_CA` at that CA in PEM
-form, e.g. `DATABASE_SSL_CA=/etc/lostcity/supabase-ca.crt`.
+### TLS
 
-Migrations are per backend: `npm run sqlite:migrate`, `npm run db:migrate`
-(mysql) and `npm run postgres:migrate`. The postgres migration also creates
-schemas, roles and grants, so it is never run automatically by the setup wizard.
-`npm run db:types` regenerates `src/db/types.ts`, which every backend shares, from
-`prisma/postgres/schema.prisma`.
+**At runtime**, leave `sslmode` out of the URL - pg lets URL parameters override
+the TLS options the engine sets, and the engine always verifies the certificate.
+Where the server presents a private root (Supabase's pooler does:
+`Supabase Root 2021 CA`, which is in no system trust store), point
+`DATABASE_SSL_CA` at that CA in PEM form, e.g.
+`DATABASE_SSL_CA=/etc/lostcity/supabase-ca.crt`. Without it the connection is
+refused, which is the intended direction to fail in.
+
+**During migrations** Prisma does its own TLS and ignores all of the above, so
+`prisma-multi.ts` builds the connection string separately. It always sets
+`sslmode=require`, so the connection cannot silently fall back to plaintext.
+Certificate verification is opt-in with `DATABASE_SSL_STRICT=1`, which adds
+`sslaccept=strict` (and `sslcert=$DATABASE_SSL_CA` when that is set); without it
+you get a warning on every run saying the certificate was not verified.
+
+Two things measured against the Supabase pooler on 2026-09-04, both worth
+knowing before you reach for something that looks stricter:
+
+- `sslmode=verify-full` **does not work**. Prisma does not understand the value,
+  falls back to `prefer`, and connects without verifying anything - silently.
+  Use `sslaccept=strict`, which does fail closed.
+- Prisma cannot be handed a private trust anchor through the URL. `sslcert` is
+  its *client* certificate; pointing it at Supabase's root still fails with "the
+  certificate was not trusted", and a multi-certificate PEM is rejected outright.
+  So `DATABASE_SSL_STRICT=1` only succeeds on a host whose own trust store
+  already carries the root.
+
+### Migrations
+
+Per backend: `npm run sqlite:migrate`, `npm run db:migrate` (mysql) and
+`npm run postgres:migrate`. The postgres migration also creates schemas, roles
+and grants, so it is never run automatically by the setup wizard.
+
+`npm run db:reset` **drops every table and every row** and passes `--force`, so
+prisma does not ask. Against postgres that is the live database `DATABASE_URL`
+points at, so it refuses unless you mean it:
+`ALLOW_DESTRUCTIVE_RESET=1 npm run db:reset`.
+
+`npm run db:types` regenerates `src/db/types.ts`, which every backend shares,
+from `prisma/postgres/schema.prisma`.
+
+`npm run db:smoke` runs every shape of query the login and friend servers issue
+against the configured backend, then deletes what it made.
 
 ## Dependencies
 
