@@ -8,12 +8,25 @@ CREATE TABLE "account" (
     "id" INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
     "username" TEXT NOT NULL,
     "password" TEXT NOT NULL,
+    "email" TEXT NOT NULL,
+    "email_normalized" TEXT NOT NULL,
     "registration_ip" TEXT,
+    "registration_group" TEXT,
     "registration_date" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "signup_agent_hash" TEXT,
     "muted_until" DATETIME,
     "banned_until" DATETIME,
+    "playable_after" DATETIME,
     "staffmodlevel" INTEGER NOT NULL DEFAULT 0,
     "members" BOOLEAN NOT NULL DEFAULT false
+);
+
+-- CreateTable
+CREATE TABLE "signup_attempt" (
+    "id" INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+    "ip" TEXT NOT NULL,
+    "ip_group" TEXT NOT NULL,
+    "created_at" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
 -- CreateTable
@@ -147,3 +160,19 @@ CREATE TABLE "input_report" (
 
 -- CreateIndex
 CREATE UNIQUE INDEX "account_username_key" ON "account"("username");
+
+-- CreateIndex
+CREATE INDEX "account_email_normalized_idx" ON "account"("email_normalized");
+
+-- CreateIndex
+CREATE INDEX "account_registration_ip_idx" ON "account"("registration_ip");
+
+-- CreateIndex
+CREATE INDEX "account_registration_group_idx" ON "account"("registration_group");
+
+-- CreateIndex
+CREATE INDEX "signup_attempt_ip_created_at_idx" ON "signup_attempt"("ip", "created_at");
+
+-- CreateIndex
+CREATE INDEX "signup_attempt_ip_group_created_at_idx" ON "signup_attempt"("ip_group", "created_at");
+

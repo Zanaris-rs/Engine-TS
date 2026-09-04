@@ -1,10 +1,6 @@
-generator kysely {
-    provider = "prisma-kysely"
-
-    output       = "../../src/db"
-    fileName     = "types.ts"
-    enumFileName = "enums.ts"
-}
+// src/db/types.ts is generated from prisma/postgres/schema.prisma only - see the
+// note at the top of that file. Keep the models here in step with it (minus the
+// postgres-only hiscore sort index) so every backend has the same columns.
 
 datasource db {
     provider = "sqlite"
@@ -21,14 +17,34 @@ model account {
     username String @unique
     password String
 
-    registration_ip   String?
-    registration_date DateTime @default(now())
+    email            String
+    email_normalized String
 
-    muted_until  DateTime?
-    banned_until DateTime?
+    registration_ip    String?
+    registration_group String?
+    registration_date  DateTime @default(now())
+    signup_agent_hash  String?
+
+    muted_until    DateTime?
+    banned_until   DateTime?
+    playable_after DateTime?
 
     staffmodlevel Int     @default(0)
     members       Boolean @default(false)
+
+    @@index([email_normalized])
+    @@index([registration_ip])
+    @@index([registration_group])
+}
+
+model signup_attempt {
+    id         Int      @id @default(autoincrement())
+    ip         String
+    ip_group   String
+    created_at DateTime @default(now())
+
+    @@index([ip, created_at])
+    @@index([ip_group, created_at])
 }
 
 model account_login {

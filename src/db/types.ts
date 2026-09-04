@@ -1,33 +1,36 @@
 import type { ColumnType } from 'kysely';
-export type Generated<T> = T extends ColumnType<infer S, infer I, infer U>
-  ? ColumnType<S, I | undefined, U>
-  : ColumnType<T, T | undefined, T>;
+export type Generated<T> = T extends ColumnType<infer S, infer I, infer U> ? ColumnType<S, I | undefined, U> : ColumnType<T, T | undefined, T>;
 export type Timestamp = ColumnType<Date, Date | string, Date | string>;
 
 export type account = {
     id: Generated<number>;
     username: string;
     password: string;
+    email: string;
+    email_normalized: string;
     registration_ip: string | null;
-    registration_date: Generated<string>;
-    muted_until: string | null;
-    banned_until: string | null;
+    registration_group: string | null;
+    registration_date: Generated<Timestamp>;
+    signup_agent_hash: string | null;
+    muted_until: Timestamp | null;
+    banned_until: Timestamp | null;
+    playable_after: Timestamp | null;
     staffmodlevel: Generated<number>;
-    members: Generated<number>;
+    members: Generated<boolean>;
 };
 export type account_login = {
     account_id: number;
     profile: string;
     logged_in: Generated<number>;
-    login_time: string | null;
+    login_time: Timestamp | null;
     logged_out: Generated<number>;
-    logout_time: string | null;
+    logout_time: Timestamp | null;
 };
 export type friendlist = {
     account_id: number;
     friend_account_id: number;
     profile: Generated<string>;
-    created: Generated<string>;
+    created: Generated<Timestamp>;
 };
 export type hiscore = {
     account_id: number;
@@ -35,7 +38,7 @@ export type hiscore = {
     type: number;
     level: number;
     value: number;
-    date: Generated<string>;
+    date: Generated<Timestamp>;
 };
 export type hiscore_large = {
     account_id: number;
@@ -43,18 +46,18 @@ export type hiscore_large = {
     type: number;
     level: number;
     value: number;
-    date: Generated<string>;
+    date: Generated<Timestamp>;
 };
 export type ignorelist = {
     account_id: number;
     value: string;
     profile: Generated<string>;
-    created: Generated<string>;
+    created: Generated<Timestamp>;
 };
 export type input_report = {
     id: Generated<number>;
     session_uuid: string;
-    timestamp: string;
+    timestamp: Timestamp;
     data: Buffer;
 };
 export type ipban = {
@@ -64,7 +67,7 @@ export type private_chat = {
     id: Generated<number>;
     account_id: number;
     profile: string;
-    timestamp: string;
+    timestamp: Timestamp;
     coord: number;
     to_account_id: number;
     message: string;
@@ -72,14 +75,14 @@ export type private_chat = {
 export type public_chat = {
     id: Generated<number>;
     session_uuid: string;
-    timestamp: string;
+    timestamp: Timestamp;
     coord: number;
     message: string;
 };
 export type report = {
     id: Generated<number>;
     session_uuid: string;
-    timestamp: string;
+    timestamp: Timestamp;
     coord: number;
     offender: string;
     reason: number;
@@ -89,14 +92,14 @@ export type session = {
     account_id: number;
     profile: string;
     world: number;
-    timestamp: string;
+    timestamp: Timestamp;
     uid: number;
     ip: string | null;
 };
 export type session_log = {
     id: Generated<number>;
     session_uuid: string;
-    timestamp: string;
+    timestamp: Timestamp;
     coord: number;
     event: string;
     event_type: Generated<number>;
@@ -104,7 +107,7 @@ export type session_log = {
 export type session_wealth = {
     id: Generated<number>;
     session_uuid: string;
-    timestamp: string;
+    timestamp: Timestamp;
     coord: number;
     event_type: Generated<number>;
     account_items: string;
@@ -112,6 +115,12 @@ export type session_wealth = {
     recipient_session: string | null;
     recipient_items: string | null;
     recipient_value: number | null;
+};
+export type signup_attempt = {
+    id: Generated<number>;
+    ip: string;
+    ip_group: string;
+    created_at: Generated<Timestamp>;
 };
 export type DB = {
     account: account;
@@ -128,4 +137,5 @@ export type DB = {
     session: session;
     session_log: session_log;
     session_wealth: session_wealth;
+    signup_attempt: signup_attempt;
 };

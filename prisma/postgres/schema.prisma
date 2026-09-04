@@ -1,9 +1,27 @@
-// src/db/types.ts is generated from prisma/postgres/schema.prisma only - see the
-// note at the top of that file. Keep the models here in step with it (minus the
-// postgres-only hiscore sort index) so every backend has the same columns.
+// The postgres schema is the source of truth for src/db/types.ts.
+//
+// prisma-kysely runs from here only (the singleworld/multiworld schemas used to
+// carry their own copy of the generator and both wrote the same file, so the
+// generated types depended on whichever migration ran last). Postgres is the
+// richest of the three backends - real booleans, real timestamps, bigint - so
+// generating from it keeps the shared types honest about intent. On sqlite the
+// runtime values are still 0/1 and 'YYYY-MM-DD HH:MM:SS' strings; see the note
+// in src/db/query.ts.
+
+generator kysely {
+    provider = "prisma-kysely"
+
+    output       = "../../src/db"
+    fileName     = "types.ts"
+    enumFileName = "enums.ts"
+
+    // hiscore_large.value is an XP total (max ~2e9 with the x10 scale), which
+    // fits a double comfortably; a bigint here would infect every caller.
+    bigIntTypeOverride = "number"
+}
 
 datasource db {
-    provider = "mysql"
+    provider = "postgresql"
     url      = env("DATABASE_URL")
 }
 
@@ -22,12 +40,12 @@ model account {
 
     registration_ip    String?
     registration_group String?
-    registration_date  DateTime @default(now())
+    registration_date  DateTime @default(now()) @db.Timestamptz(3)
     signup_agent_hash  String?
 
-    muted_until    DateTime?
-    banned_until   DateTime?
-    playable_after DateTime?
+    muted_until    DateTime? @db.Timestamptz(3)
+    banned_until   DateTime? @db.Timestamptz(3)
+    playable_after DateTime? @db.Timestamptz(3)
 
     staffmodlevel Int     @default(0)
     members       Boolean @default(false)
@@ -41,7 +59,7 @@ model signup_attempt {
     id         Int      @id @default(autoincrement())
     ip         String
     ip_group   String
-    created_at DateTime @default(now())
+    created_at DateTime @default(now()) @db.Timestamptz(3)
 
     @@index([ip, created_at])
     @@index([ip_group, created_at])
@@ -52,10 +70,10 @@ model account_login {
     profile    String
 
     logged_in  Int       @default(0)
-    login_time DateTime?
+    login_time DateTime? @db.Timestamptz(3)
 
     logged_out  Int       @default(0)
-    logout_time DateTime?
+    logout_time DateTime? @db.Timestamptz(3)
 
     @@id([profile, account_id])
 }
@@ -67,9 +85,10 @@ model hiscore {
 
     level Int
     value Int
-    date  DateTime @default(now()) @updatedAt
+    date  DateTime @default(now()) @updatedAt @db.Timestamptz(3)
 
     @@id([profile, type, account_id])
+    @@index([profile, type, value(sort: Desc)])
 }
 
 model hiscore_large {
@@ -79,9 +98,10 @@ model hiscore_large {
 
     level Int
     value BigInt
-    date  DateTime @default(now()) @updatedAt
+    date  DateTime @default(now()) @updatedAt @db.Timestamptz(3)
 
     @@id([profile, type, account_id])
+    @@index([profile, type, value(sort: Desc)])
 }
 
 model friendlist {
@@ -89,7 +109,7 @@ model friendlist {
     friend_account_id Int
     profile           String @default("main")
 
-    created DateTime @default(now())
+    created DateTime @default(now()) @db.Timestamptz(3)
 
     @@id([profile, account_id, friend_account_id])
 }
@@ -99,7 +119,7 @@ model ignorelist {
     value      String
     profile    String @default("main")
 
-    created DateTime @default(now())
+    created DateTime @default(now()) @db.Timestamptz(3)
 
     @@id([profile, account_id, value])
 }
@@ -110,7 +130,7 @@ model session {
     account_id Int
     profile    String
     world      Int
-    timestamp  DateTime
+    timestamp  DateTime @db.Timestamptz(3)
 
     uid Int
     ip  String?
@@ -120,7 +140,7 @@ model session_log {
     id Int @id @default(autoincrement())
 
     session_uuid String
-    timestamp    DateTime
+    timestamp    DateTime @db.Timestamptz(3)
 
     coord      Int
     event      String
@@ -131,16 +151,16 @@ model session_wealth {
     id Int @id @default(autoincrement())
 
     session_uuid String
-    timestamp    DateTime
+    timestamp    DateTime @db.Timestamptz(3)
 
     coord      Int
     event_type Int @default(-1)
 
-    account_items String @db.MediumText
+    account_items String
     account_value Int
 
     recipient_session String?
-    recipient_items   String? @db.MediumText
+    recipient_items   String?
     recipient_value   Int?
 }
 
@@ -148,7 +168,7 @@ model public_chat {
     id Int @id @default(autoincrement())
 
     session_uuid String
-    timestamp    DateTime
+    timestamp    DateTime @db.Timestamptz(3)
 
     coord   Int
     message String
@@ -160,7 +180,7 @@ model private_chat {
     account_id Int
     profile    String
 
-    timestamp     DateTime
+    timestamp     DateTime @db.Timestamptz(3)
     coord         Int
     to_account_id Int
     message       String
@@ -170,7 +190,7 @@ model report {
     id Int @id @default(autoincrement())
 
     session_uuid String
-    timestamp    DateTime
+    timestamp    DateTime @db.Timestamptz(3)
 
     coord    Int
     offender String
@@ -181,7 +201,7 @@ model input_report {
     id Int @id @default(autoincrement())
 
     session_uuid String
-    timestamp    DateTime
+    timestamp    DateTime @db.Timestamptz(3)
 
     data Bytes
 }

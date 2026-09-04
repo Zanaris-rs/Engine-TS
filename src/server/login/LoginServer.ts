@@ -2,9 +2,11 @@ import fs from 'fs';
 import fsp from 'fs/promises';
 
 import * as bcrypt from 'bcrypt-ts';
+import type { Selectable } from 'kysely';
 import { WebSocket, WebSocketServer } from 'ws';
 
 import { db, toDbDate } from '#/db/query.js';
+import type { account } from '#/db/types.js';
 import Player from '#/engine/entity/Player.js';
 import { PlayerLoading } from '#/engine/entity/PlayerLoading.js';
 import { PlayerStatEnabled } from '#/engine/entity/PlayerStat.js';
@@ -15,7 +17,13 @@ import { printInfo } from '#/util/Logger.js';
 import { startManagementWeb } from '#/web.js';
 import InvType from '#/cache/config/InvType.js';
 
-async function updateHiscores(account: { id: number; staffmodlevel: number; banned_until: string | null } | undefined, player: Player, profile: string) {
+// postgres hands back a Date, sqlite the 'YYYY-MM-DD HH:MM:SS' string it stored;
+// the generated types only know about the former.
+type HiscoreAccount = Pick<Selectable<account>, 'id' | 'staffmodlevel'> & {
+    banned_until: Date | string | null;
+};
+
+async function updateHiscores(account: HiscoreAccount | undefined, player: Player, profile: string) {
     if (!account) return;
 
     if (account.staffmodlevel > 1) {
@@ -202,19 +210,23 @@ export default class LoginServer {
 
                             if (!Environment.website.registration && !account) {
                                 // register the user automatically
-                                const insertResult = await db
+                                //
+                                // no insertId gate: kysely's postgres driver never sets one, and
+                                // this is the only registration path on a world with the website
+                                // gate off - a missing insertId would hang every new player with
+                                // no reply at all. executeTakeFirstOrThrow surfaces a real failure
+                                // to the catch below instead.
+                                await db
                                     .insertInto('account')
                                     .values({
                                         username,
                                         password: bcrypt.hashSync(password.toLowerCase(), 10),
+                                        email: `${toSafeName(username)}@localhost`,
+                                        email_normalized: `${toSafeName(username)}@localhost`,
                                         registration_ip: remoteAddress,
                                         registration_date: toDbDate(new Date())
                                     })
-                                    .executeTakeFirst();
-
-                                if (typeof insertResult.insertId === 'undefined') {
-                                    return;
-                                }
+                                    .executeTakeFirstOrThrow();
 
                                 account = await db
                                     .selectFrom('account')
@@ -249,8 +261,8 @@ export default class LoginServer {
                             if (nodeMembers && !account.members) {
                                 if (Environment.node.autoSubscribeMembers) {
                                     // Set members=1 for the account and proceed with login
-                                    await db.updateTable('account').where('id', '=', account.id).set('members', 1).executeTakeFirstOrThrow();
-                                    account.members = 1;
+                                    await db.updateTable('account').where('id', '=', account.id).set('members', true).executeTakeFirstOrThrow();
+                                    account.members = true;
                                 } else {
                                     s.send(
                                         JSON.stringify({
