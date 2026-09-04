@@ -9,7 +9,7 @@ import { db, toDbDate } from '#/db/query.js';
 import { PlayerLoading } from '#/engine/entity/PlayerLoading.js';
 import Packet from '#/io/Packet.js';
 import { updateHiscores } from '#/server/login/Hiscores.js';
-import { loginRetryReplyTo } from '#/server/login/LoginMessage.js';
+import { handleWithFailureReply, retryReply, type ReplyId, type SendReply } from '#/server/login/LoginMessage.js';
 import Environment from '#/util/Environment.js';
 import { toSafeName } from '#/util/JString.js';
 import { printInfo } from '#/util/Logger.js';
@@ -29,15 +29,13 @@ export default class LoginServer {
     private server: WebSocketServer;
     private loginRequests: Set<string> = new Set();
 
-    rejectLoginForSafety(s: WebSocket, replyTo: number) {
-        // Send opcode 7 ('Please try again') if something has gone wrong
-        // during login attempt, which may be resolved by simply retrying.
-        s.send(
-            JSON.stringify({
-                replyTo,
-                response: 7
-            })
-        );
+    // Send opcode 7 ('Please try again') if something has gone wrong during a
+    // login attempt, which may be resolved by simply retrying. Goes through
+    // sendReply rather than the socket so it counts as having answered.
+    //
+    // replyTo is a string in production: ws-sync builds it as 'id_<uuid>'.
+    rejectLoginForSafety(sendReply: SendReply, replyTo: ReplyId) {
+        sendReply(retryReply(replyTo));
     }
 
     async wouldResetSaveFile(newSaveBytes: Buffer, profile: string, username: string) {
@@ -70,21 +68,12 @@ export default class LoginServer {
 
         this.server.on('connection', (s: WebSocket) => {
             s.on('message', async (data: Buffer) => {
-                let parsed: unknown;
-                let replied = false;
-
-                // every reply in the player_login branch goes through this, so the
-                // catch below can tell "threw before answering" from "answered, then
-                // threw" - sending a second payload for a replyTo the world has
-                // already resolved would overwrite a successful login with a failure
-                const sendReply = (payload: object) => {
-                    replied = true;
-                    s.send(JSON.stringify(payload));
-                };
-
-                try {
-                    const msg = JSON.parse(data.toString());
-                    parsed = msg;
+                // handleWithFailureReply owns the parse, the try/catch and the
+                // answer-on-failure: a throw anywhere below must not leave the
+                // world blocking on fetchSync for its full ten second timeout
+                await handleWithFailureReply(data.toString(), s, async (message, sendReply) => {
+                    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                    const msg = message as any;
                     const { type, nodeId, nodeTime, profile } = msg;
 
                     if (type === 'world_startup') {
@@ -209,7 +198,8 @@ export default class LoginServer {
                                     if (!save || !PlayerLoading.verify(new Packet(save))) {
                                         // Extreme safety check for savefile existing but having bad data on read:
                                         console.error('on reconnect, account_id %s had invalid save data on disk', account.id);
-                                        sendReply({ replyTo, response: 7 });
+                                        this.rejectLoginForSafety(sendReply, replyTo);
+                                        return;
                                     }
                                     sendReply({
                                         replyTo,
@@ -271,7 +261,7 @@ export default class LoginServer {
                                 // ^ Only not an error if the user has never logged in before:
                                 if (account.logout_time !== null) {
                                     console.error('on login, account_id %s had no save data on disk!', account.id);
-                                    sendReply({ replyTo, response: 7 });
+                                    this.rejectLoginForSafety(sendReply, replyTo);
                                     return;
                                 } else {
                                     sendReply({
@@ -288,7 +278,7 @@ export default class LoginServer {
                                 // Extreme safety check for savefile existing but having bad data on read:
                                 if (!save || !PlayerLoading.verify(new Packet(save))) {
                                     console.error('on login, account_id %s had invalid save data on disk!', account.id);
-                                    sendReply({ replyTo, response: 7 });
+                                    this.rejectLoginForSafety(sendReply, replyTo);
                                     return;
                                 }
                                 sendReply({
@@ -358,13 +348,14 @@ export default class LoginServer {
                                 .executeTakeFirst();
                         }
 
-                        s.send(
-                            JSON.stringify({
-                                replyTo,
-                                response: 0
-                            })
-                        );
+                        sendReply({
+                            replyTo,
+                            response: 0
+                        });
 
+                        // after the reply on purpose: the world only needs to know the
+                        // save landed, and a hiscore failure must not turn an
+                        // acknowledged logout into a retry
                         await updateHiscores(account, PlayerLoading.load(username, new Packet(raw), null), profile);
                     } else if (type === 'player_autosave') {
                         const { username, save } = msg;
@@ -426,19 +417,7 @@ export default class LoginServer {
                             .where('username', '=', username)
                             .executeTakeFirst();
                     }
-                } catch (err) {
-                    console.error(err);
-
-                    // the world waits on player_login through fetchSync, which polls
-                    // for a reply and only gives up after ten seconds. Throwing
-                    // without answering turns any database hiccup into a ten second
-                    // stall and a generic client failure, so answer 'please try
-                    // again' immediately instead.
-                    const replyTo = replied ? null : loginRetryReplyTo(parsed);
-                    if (replyTo !== null) {
-                        this.rejectLoginForSafety(s, replyTo);
-                    }
-                }
+                });
             });
 
             s.on('close', () => {});
