@@ -11,6 +11,7 @@
     "#tools/*": "./tools/*"
   },
   "scripts": {
+    "account": "tsx tools/server/account.ts",
     "build": "tsx tools/pack/Build.ts",
     "clean": "tsx tools/pack/Clean.ts",
     "db:migrate": "tsx tools/server/prisma-multi.ts migrate deploy",
