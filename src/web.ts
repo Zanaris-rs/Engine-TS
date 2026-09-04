@@ -154,6 +154,19 @@ fastify.get<{ Querystring: { plugin?: string; lowmem?: string } }>('/rs2.cgi', a
     }
 });
 
+// public world info, consumed by the world-select website
+
+fastify.get('/world.json', async (_req, reply) => {
+    reply.header('Access-Control-Allow-Origin', '*');
+    reply.header('Cache-Control', 'public, max-age=10');
+    return {
+        id: Environment.node.id,
+        members: Environment.node.members,
+        players: World.getTotalPlayers(),
+        maxPlayers: Environment.node.maxConnected
+    };
+});
+
 // cache routes
 
 fastify.get('/crc:cachebust', async (_req, reply) => {
