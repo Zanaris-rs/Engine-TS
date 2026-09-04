@@ -68,7 +68,7 @@ import UpdateFriendList from '#/network/game/server/model/UpdateFriendList.js';
 import UpdateIgnoreList from '#/network/game/server/model/UpdateIgnoreList.js';
 import UpdateRebootTimer from '#/network/game/server/model/UpdateRebootTimer.js';
 import ClientSocket from '#/server/ClientSocket.js';
-import { FriendsServerOpcodes } from '#/server/friend/FriendServer.js';
+import { FriendsServerOpcodes } from '#/server/friend/FriendOpcodes.js';
 import { FriendThreadMessage } from '#/server/friend/FriendThread.js';
 import { LoggerEventType } from '#/server/logger/LoggerEventType.js';
 import { filteredEventTypes, groupedEventTypes } from '#/server/logger/WealthEventType.js';
