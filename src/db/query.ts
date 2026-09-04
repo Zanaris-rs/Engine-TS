@@ -38,9 +38,18 @@ if (Environment.db.backend === 'sqlite') {
             // string and any bigint column into one too
             pg.types.setTypeParser(20, Number);
 
+            const connectionString = getDatabaseUrl(Environment);
+
+            if (connectionString.length === 0) {
+                // pg would otherwise fall back to libpq's defaults and quietly
+                // try localhost, which fails much later and looks like anything
+                // but "the url was never configured"
+                throw new Error('No postgres connection string: set DATABASE_URL, or db.url in data/config/world.json.');
+            }
+
             const ca = process.env.DATABASE_SSL_CA;
             const pool = new pg.Pool({
-                connectionString: getDatabaseUrl(Environment),
+                connectionString,
                 // never rejectUnauthorized: false - the database password rides
                 // this connection. Keep sslmode out of the url as well: pg lets
                 // url parameters override this object.
