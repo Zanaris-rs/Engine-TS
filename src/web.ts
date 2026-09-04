@@ -345,7 +345,15 @@ management.get('/setup/config', async () => {
     };
 });
 
-management.put('/setup/config', async req => {
+management.put('/setup/config', async (req, reply) => {
+    // this endpoint rewrites world.json wholesale, and node.production: false
+    // grants every player staffmodlevel 4 on the next restart - destructive
+    // commands included. It is a dev convenience, not an admin API.
+    if (Environment.node.production) {
+        reply.status(403);
+        return { error: 'Editing the config over HTTP is disabled in production.' };
+    }
+
     const config = normalizeWorldConfig(req.body);
     saveWorldConfig(config);
 
@@ -356,5 +364,8 @@ management.put('/setup/config', async req => {
 });
 
 export async function startManagementWeb() {
-    await management.listen({ port: Environment.web.managementPort, host: '0.0.0.0' });
+    // loopback only: this server is not behind Caddy and bootstrap.sh sets no
+    // host firewall, so reach it with `ssh -L 8898:localhost:8898` like the rest
+    // of the fleet's admin surface
+    await management.listen({ port: Environment.web.managementPort, host: '127.0.0.1' });
 }
