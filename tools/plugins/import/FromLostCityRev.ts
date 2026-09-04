@@ -4,7 +4,7 @@ import path from 'path';
 
 import Environment from '#/util/Environment.js';
 import { readOb2 } from '#tools/plugins/Ob2.js';
-import { PLUGIN_ID_BASE } from '#tools/plugins/PluginIds.js';
+import { readManifest } from '#tools/plugins/Manifest.js';
 import { pluginsRoot, modelsRoot, readFragments } from '#tools/plugins/PluginPacks.js';
 
 /**
@@ -28,67 +28,101 @@ function arg(name: string): string | undefined {
 }
 
 const plugin = arg('plugin');
-const branch = arg('branch');
-const model = arg('model');
 
-if (!plugin || !branch || !model) {
-    console.error('usage: FromLostCityRev.ts --plugin <name> --branch <branch> --model <path/in/branch.ob2> [--as <name>]');
+if (!plugin) {
+    console.error('usage: FromLostCityRev.ts --plugin <name> [--from-manifest | --branch <b> --model <path.ob2> [--as <name>]]');
     process.exit(1);
+}
+
+/** Everything the plugin's manifest says it needs, so an install is one command. */
+type Wanted = { branch: string; model: string; as?: string };
+const wanted: Wanted[] = [];
+
+if (process.argv.includes('--from-manifest')) {
+    const manifest = readManifest(plugin);
+
+    if (!manifest) {
+        console.error(`${plugin} has no plugin.json to read assets from`);
+        process.exit(1);
+    }
+
+    for (const asset of manifest.assets ?? []) {
+        wanted.push({ branch: asset.from, model: asset.model, as: asset.as });
+    }
+
+    if (wanted.length === 0) {
+        console.log(`${plugin} declares no assets`);
+        process.exit(0);
+    }
+} else {
+    const branch = arg('branch');
+    const model = arg('model');
+
+    if (!branch || !model) {
+        console.error('usage: FromLostCityRev.ts --plugin <name> [--from-manifest | --branch <b> --model <path.ob2> [--as <name>]]');
+        process.exit(1);
+    }
+
+    wanted.push({ branch, model, as: arg('as') });
 }
 
 const contentDir = path.resolve(Environment.build.srcDir);
-const requested = arg('as') ?? path.basename(model, '.ob2');
-// plugin assets are prefixed so they can never collide with an upstream rename
-const name = requested.startsWith('plugin_') ? requested : `plugin_${requested}`;
+// narrowing from the guard above does not survive into the function below
+const pluginName: string = plugin;
 
-let blob: Buffer;
-try {
-    blob = execFileSync('git', ['show', `${branch}:${model}`], { cwd: contentDir, maxBuffer: 64 * 1024 * 1024 });
-} catch {
-    console.error(`Could not read ${branch}:${model} from ${contentDir}`);
-    console.error('Check the branch exists locally (git branch -a) and the path is correct.');
-    process.exit(1);
+for (const item of wanted) {
+    importOne(item.branch, item.model, item.as);
 }
 
-const modelDir = path.join(modelsRoot(), plugin);
-const scriptDir = path.join(pluginsRoot(), plugin);
-fs.mkdirSync(modelDir, { recursive: true });
-fs.mkdirSync(path.join(scriptDir, 'configs'), { recursive: true });
-fs.mkdirSync(path.join(scriptDir, 'scripts'), { recursive: true });
+function importOne(branch: string, model: string, asName: string | undefined): void {
+    const requested = asName ?? path.basename(model, '.ob2');
+    // plugin assets are prefixed so they can never collide with an upstream rename
+    const name = requested.startsWith('plugin_') ? requested : `plugin_${requested}`;
 
-const target = path.join(modelDir, `${name}.ob2`);
-fs.writeFileSync(target, blob);
+    let blob: Buffer;
+    try {
+        blob = execFileSync('git', ['show', `${branch}:${model}`], { cwd: contentDir, maxBuffer: 64 * 1024 * 1024 });
+    } catch {
+        console.error(`Could not read ${branch}:${model} from ${contentDir}`);
+        console.error('Check the branch exists locally (git branch -a) and the path is correct.');
+        process.exit(1);
+    }
 
-const fragment = path.join(scriptDir, 'plugin.pack');
-const existing = readFragments();
-const already = existing.find(e => e.type === 'model' && e.name === name);
+    const modelDir = path.join(modelsRoot(), pluginName);
+    const scriptDir = path.join(pluginsRoot(), pluginName);
+    fs.mkdirSync(modelDir, { recursive: true });
+    fs.mkdirSync(path.join(scriptDir, 'configs'), { recursive: true });
+    fs.mkdirSync(path.join(scriptDir, 'scripts'), { recursive: true });
 
-let id: number;
-if (already) {
-    id = already.id;
-    console.log(`reused model id ${id} for ${name} (already declared)`);
-} else {
-    const base = PLUGIN_ID_BASE.model;
-    const used = existing.filter(e => e.type === 'model').map(e => e.id);
-    id = used.length === 0 ? base : Math.max(base - 1, ...used) + 1;
+    const target = path.join(modelDir, `${name}.ob2`);
+    fs.writeFileSync(target, blob);
 
-    const header = fs.existsSync(fragment) ? '' : '# <type> <id> <name> - ids come from tools/plugins/PluginIds.ts\n';
-    fs.appendFileSync(fragment, `${header}model ${id} ${name}\n`);
-    console.log(`declared model ${id} ${name} in ${path.relative(process.cwd(), fragment)}`);
+    const fragment = path.join(scriptDir, 'plugin.pack');
+
+    if (readFragments().some(e => e.type === 'model' && e.name === name)) {
+        console.log(`${name} is already declared`);
+    } else {
+        // `auto` rather than a number: the id belongs to the installing server, not to this machine,
+        // which is what lets a plugin be shared without its ids colliding with someone else's
+        const header = fs.existsSync(fragment) ? '' : '# <type> <id|auto> <name>\n';
+        fs.appendFileSync(fragment, `${header}model auto ${name}\n`);
+        console.log(`declared model auto ${name} in ${path.relative(process.cwd(), fragment)}`);
+    }
+
+    console.log(`wrote ${path.relative(process.cwd(), target)} (${blob.length} bytes)`);
+
+    const info = readOb2(blob);
+
+    if (!info.wellFormed) {
+        console.error(`\nWARNING: ${name}.ob2 does not parse as an .ob2 (body ${info.actualLength} bytes, header describes ${info.expectedLength}).`);
+    } else if (info.rigged) {
+        // geometry, colours and face indices are identical across revisions; rig labels are not
+        const which = [info.hasVertexLabels ? 'VSKIN' : '', info.hasFaceLabels ? 'TSKIN' : ''].filter(Boolean).join('+');
+        console.warn(`\nWARNING: this model is RIGGED (${which}).`);
+        console.warn('Rig labels are re-assigned per model between revisions, so animating it with this');
+        console.warn("revision's seqs will mangle it. Re-label it for 289 before use - see content/PLUGINS.md.");
+    }
 }
 
-console.log(`wrote ${path.relative(process.cwd(), target)} (${blob.length} bytes)`);
-
-const info = readOb2(blob);
-
-if (!info.wellFormed) {
-    console.error(`\nWARNING: ${name}.ob2 does not parse as an .ob2 (body ${info.actualLength} bytes, header describes ${info.expectedLength}).`);
-} else if (info.rigged) {
-    // geometry, colours and face indices are identical across revisions; rig labels are not
-    const which = [info.hasVertexLabels ? 'VSKIN' : '', info.hasFaceLabels ? 'TSKIN' : ''].filter(Boolean).join('+');
-    console.warn(`\nWARNING: this model is RIGGED (${which}).`);
-    console.warn('Rig labels are re-assigned per model between revisions, so animating it with this');
-    console.warn("revision's seqs will mangle it. Re-label it for 289 before use - see content/PLUGINS.md.");
-}
-console.log('\nnext: reference it from the plugin config, then run');
+console.log('\nnext: reference them from the plugin config, then run');
 console.log('  npx tsx tools/plugins/SyncPluginPacks.ts && npx tsx tools/plugins/VerifyPluginPacks.ts');

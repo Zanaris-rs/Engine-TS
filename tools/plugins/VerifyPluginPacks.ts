@@ -5,7 +5,9 @@ import Environment from '#/util/Environment.js';
 import { PackFile } from '#tools/pack/PackFileBase.js';
 import { PLUGIN_ID_BASE, PLUGIN_ID_CEILING, PLUGIN_PACK_TYPES } from '#tools/plugins/PluginIds.js';
 import { readOb2 } from '#tools/plugins/Ob2.js';
-import { PluginEntry, findDrift, headroom, listPlugins, modelsRoot, readFragments, upstreamRef } from '#tools/plugins/PluginPacks.js';
+import { pluginStates } from '#tools/plugins/GenerateContent.js';
+import { validateManifests } from '#tools/plugins/Manifest.js';
+import { PluginEntry, findDrift, headroom, listPlugins, modelsRoot, readFragments, readLock, resolve, upstreamRef } from '#tools/plugins/PluginPacks.js';
 
 let failed = false;
 let warnings = 0;
@@ -35,11 +37,31 @@ function where(entry: PluginEntry): string {
 }
 
 const plugins = listPlugins();
-const entries = readFragments();
+const entries = resolve(readFragments(), readLock()).entries;
 
 if (plugins.length === 0) {
     console.log('No content plugins installed.');
     process.exit(0);
+}
+
+// 0: manifests, including how plugins relate to each other
+const states = new Map(pluginStates().map(p => [p.name, p.enabled]));
+const { manifests, problems } = validateManifests(name => states.get(name) ?? false);
+
+for (const problem of problems) {
+    fail(`${problem.plugin}: ${problem.message}`, problem.hint);
+}
+if (problems.length === 0) {
+    ok(`${manifests.size} manifest(s) valid for revision ${[...manifests.values()][0]?.revision ?? '?'}`);
+}
+
+// declared assets should actually be present
+for (const [name, manifest] of manifests) {
+    for (const asset of manifest.assets ?? []) {
+        if (!fs.existsSync(path.join(modelsRoot(), name, `${asset.as}.ob2`))) {
+            fail(`${name}: declared asset "${asset.as}" is missing`, `import it with: npx tsx tools/plugins/import/FromLostCityRev.ts --plugin ${name} --from-manifest`);
+        }
+    }
 }
 
 // 1 + 2: every declared id sits inside its type's reserved window

@@ -6,14 +6,33 @@ import Environment from '#/util/Environment.js';
 import { PackFile } from '#tools/pack/PackFileBase.js';
 import { PLUGIN_ID_BASE, PLUGIN_ID_CEILING, PLUGIN_PACK_TYPES, PluginPackType, isPluginPackType } from '#tools/plugins/PluginIds.js';
 
-/** One declared id from a plugin's `plugin.pack` fragment. */
-export type PluginEntry = {
+/** One declared id from a plugin's `plugin.pack` fragment, before allocation. */
+export type RawEntry = {
     type: PluginPackType;
-    id: number;
+    /** A fixed id, or `auto` to let the installing server pick one. */
+    id: number | 'auto';
     name: string;
     plugin: string;
     file: string;
     line: number;
+};
+
+/** A fragment entry with its id decided. */
+export type PluginEntry = RawEntry & { id: number };
+
+/**
+ * Which id each symbol was given, so it never moves.
+ *
+ * Ids leak into player saves - an obj id in a bank, a varp holding quest progress - so an id that
+ * shifts silently rewrites what players own. Removed symbols are tombstoned rather than freed for
+ * the same reason: reusing an id would alias a deleted item onto a new one in existing saves.
+ *
+ * This file is not derived. Losing it reshuffles every auto id, so commit it.
+ */
+export type Lock = {
+    version: number;
+    assigned: Partial<Record<PluginPackType, Record<string, number>>>;
+    tombstoned: Partial<Record<PluginPackType, Record<string, number>>>;
 };
 
 export function pluginsRoot(): string {
@@ -50,8 +69,8 @@ export function listPlugins(): string[] {
  * Parse every plugin's fragment. Format is whitespace-separated `<type> <id> <name>`, with `#`
  * starting a comment. Fragments are the source of truth; `content/pack/*.pack` is derived.
  */
-export function readFragments(): PluginEntry[] {
-    const entries: PluginEntry[] = [];
+export function readFragments(): RawEntry[] {
+    const entries: RawEntry[] = [];
 
     for (const plugin of listPlugins()) {
         const file = path.join(pluginsRoot(), plugin, 'plugin.pack');
@@ -67,8 +86,8 @@ export function readFragments(): PluginEntry[] {
 }
 
 /** Split out so the parsing rules can be tested without a content tree. */
-export function parseFragment(text: string, plugin: string, file: string): PluginEntry[] {
-    const entries: PluginEntry[] = [];
+export function parseFragment(text: string, plugin: string, file: string): RawEntry[] {
+    const entries: RawEntry[] = [];
     {
         const lines = text.split('\n');
 
@@ -91,10 +110,16 @@ export function parseFragment(text: string, plugin: string, file: string): Plugi
                 throw new Error(`${file}:${i + 1}: unknown pack type "${type}" (expected one of ${PLUGIN_PACK_TYPES.join(', ')})`);
             }
 
-            const id = Number(rawId);
+            let id: number | 'auto';
 
-            if (!Number.isInteger(id) || id < 0) {
-                throw new Error(`${file}:${i + 1}: "${rawId}" is not a valid id`);
+            if (rawId === 'auto') {
+                id = 'auto';
+            } else {
+                id = Number(rawId);
+
+                if (!Number.isInteger(id) || id < 0) {
+                    throw new Error(`${file}:${i + 1}: "${rawId}" is not a valid id (use a number, or "auto")`);
+                }
             }
 
             entries.push({ type, id, name, plugin, file, line: i + 1 });
@@ -227,4 +252,88 @@ export function headroom(): Headroom[] {
             slots: ceiling - base
         };
     });
+}
+
+export function lockPath(): string {
+    return path.resolve(`${Environment.build.srcDir}/pack/plugin-ids.lock.json`);
+}
+
+export function readLock(): Lock {
+    if (!fs.existsSync(lockPath())) {
+        return { version: 1, assigned: {}, tombstoned: {} };
+    }
+
+    try {
+        const parsed = JSON.parse(fs.readFileSync(lockPath(), 'utf8')) as Lock;
+        return { version: parsed.version ?? 1, assigned: parsed.assigned ?? {}, tombstoned: parsed.tombstoned ?? {} };
+    } catch {
+        throw new Error(`${lockPath()} is not readable JSON. It records which id every plugin symbol was given; do not delete it.`);
+    }
+}
+
+export function writeLock(lock: Lock): void {
+    fs.writeFileSync(lockPath(), JSON.stringify(lock, null, 4) + '\n');
+}
+
+/**
+ * Decide an id for every `auto` symbol.
+ *
+ * Assignments are sticky: once a symbol has an id it keeps it, so plugins can be shared without
+ * their ids being a property of the author's machine. Ids already taken by fixed declarations,
+ * live assignments, or tombstones are never handed out again.
+ */
+export function resolve(raw: RawEntry[], lock: Lock): { entries: PluginEntry[]; lock: Lock; changed: boolean } {
+    const next: Lock = { version: 1, assigned: { ...lock.assigned }, tombstoned: { ...lock.tombstoned } };
+    let changed = false;
+    const entries: PluginEntry[] = [];
+
+    for (const type of PLUGIN_PACK_TYPES) {
+        const ofType = raw.filter(e => e.type === type);
+        if (ofType.length === 0) {
+            continue;
+        }
+
+        const assigned = { ...(next.assigned[type] ?? {}) };
+        const tombstoned = next.tombstoned[type] ?? {};
+        const taken = new Set<number>([...ofType.filter(e => e.id !== 'auto').map(e => e.id as number), ...Object.values(assigned), ...Object.values(tombstoned)]);
+
+        for (const entry of ofType) {
+            if (entry.id !== 'auto') {
+                entries.push(entry as PluginEntry);
+                continue;
+            }
+
+            let id = assigned[entry.name];
+
+            if (id === undefined) {
+                id = PLUGIN_ID_BASE[type];
+                while (taken.has(id)) {
+                    id++;
+                }
+
+                if (id >= PLUGIN_ID_CEILING[type]) {
+                    throw new Error(`${entry.file}:${entry.line}: no ${type} ids left - the range ${PLUGIN_ID_BASE[type]}..${PLUGIN_ID_CEILING[type] - 1} is full`);
+                }
+
+                assigned[entry.name] = id;
+                taken.add(id);
+                changed = true;
+            }
+
+            entries.push({ ...entry, id });
+        }
+
+        // a symbol that is no longer declared keeps its id reserved forever
+        for (const [name, id] of Object.entries(assigned)) {
+            if (!ofType.some(e => e.name === name)) {
+                delete assigned[name];
+                next.tombstoned[type] = { ...(next.tombstoned[type] ?? {}), [name]: id };
+                changed = true;
+            }
+        }
+
+        next.assigned[type] = assigned;
+    }
+
+    return { entries, lock: next, changed };
 }

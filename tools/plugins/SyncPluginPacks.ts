@@ -1,13 +1,23 @@
 import fs from 'fs';
 
 import { write as generateContent } from '#tools/plugins/GenerateContent.js';
-import { listPlugins, findDrift, headroom, packPath, readFragments, upstreamRef } from '#tools/plugins/PluginPacks.js';
+import { listPlugins, findDrift, headroom, packPath, readFragments, readLock, resolve, upstreamRef, writeLock } from '#tools/plugins/PluginPacks.js';
 
 const check = process.argv.includes('--check');
 const plugins = listPlugins();
-const entries = readFragments();
+const raw = readFragments();
+const { entries, lock, changed } = resolve(raw, readLock());
 
-console.log(`${plugins.length} plugin(s), ${entries.length} declared id(s)`);
+const autos = raw.filter(e => e.id === 'auto').length;
+console.log(`${plugins.length} plugin(s), ${entries.length} declared id(s)${autos ? `, ${autos} allocated automatically` : ''}`);
+
+if (changed && !check) {
+    writeLock(lock);
+    console.log('updated pack/plugin-ids.lock.json');
+} else if (changed && check) {
+    console.error('DRIFT  plugin-ids.lock.json is out of date');
+    process.exitCode = 1;
+}
 
 // Rebuilding a pack means deleting every id at or above the base, so refuse outright if
 // upstream has grown into that range - otherwise this quietly destroys upstream content.
