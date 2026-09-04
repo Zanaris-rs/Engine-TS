@@ -2,116 +2,25 @@ import fs from 'fs';
 import fsp from 'fs/promises';
 
 import * as bcrypt from 'bcrypt-ts';
-import type { Selectable } from 'kysely';
 import { WebSocket, WebSocketServer } from 'ws';
 
 import { db, toDbDate } from '#/db/query.js';
-import type { account } from '#/db/types.js';
-import Player from '#/engine/entity/Player.js';
 import { PlayerLoading } from '#/engine/entity/PlayerLoading.js';
-import { PlayerStatEnabled } from '#/engine/entity/PlayerStat.js';
 import Packet from '#/io/Packet.js';
+import { updateHiscores } from '#/server/login/Hiscores.js';
 import Environment from '#/util/Environment.js';
 import { toSafeName } from '#/util/JString.js';
 import { printInfo } from '#/util/Logger.js';
 import { startManagementWeb } from '#/web.js';
 import InvType from '#/cache/config/InvType.js';
 
-// postgres hands back a Date, sqlite the 'YYYY-MM-DD HH:MM:SS' string it stored;
-// the generated types only know about the former.
-type HiscoreAccount = Pick<Selectable<account>, 'id' | 'staffmodlevel'> & {
-    banned_until: Date | string | null;
-};
-
-async function updateHiscores(account: HiscoreAccount | undefined, player: Player, profile: string) {
-    if (!account) return;
-
-    if (account.staffmodlevel > 1) {
-        return;
-    }
-
-    if (account.banned_until !== null && new Date(account.banned_until) >= new Date()) {
-        return;
-    }
-
-    const insert = [];
-    const update = [];
-
-    let totalXp = 0;
-    let totalLevel = 0;
-    for (let i = 0; i < player.stats.length; i++) {
-        if (!PlayerStatEnabled[i]) {
-            continue;
-        }
-
-        totalXp += player.stats[i];
-        totalLevel += player.baseLevels[i];
-    }
-
-    const existing = await db.selectFrom('hiscore_large').select('type').select('value').where('account_id', '=', account.id).where('type', '=', 0).where('profile', '=', profile).executeTakeFirst();
-    if (existing && existing.value !== totalXp) {
-        await db
-            .updateTable('hiscore_large')
-            .set({
-                type: 0,
-                level: totalLevel,
-                value: totalXp,
-                date: toDbDate(new Date())
-            })
-            .where('account_id', '=', account.id)
-            .where('type', '=', 0)
-            .where('profile', '=', profile)
-            .execute();
-    } else if (!existing) {
-        await db
-            .insertInto('hiscore_large')
-            .values({
-                account_id: account.id,
-                profile,
-                type: 0,
-                level: totalLevel,
-                value: totalXp
-            })
-            .execute();
-    }
-
-    for (let stat = 0; stat < player.stats.length; stat++) {
-        if (!PlayerStatEnabled[stat]) {
-            continue;
-        }
-
-        if (player.baseLevels[stat] >= 15) {
-            const hiscoreType = stat + 1;
-
-            // todo: can we upsert in kysely?
-            const existing = await db.selectFrom('hiscore').select('type').select('value').where('account_id', '=', account.id).where('type', '=', hiscoreType).where('profile', '=', profile).executeTakeFirst();
-            if (existing && existing.value !== player.stats[stat]) {
-                update.push({
-                    type: hiscoreType,
-                    level: player.baseLevels[stat],
-                    value: player.stats[stat],
-                    date: toDbDate(new Date())
-                });
-            } else if (!existing) {
-                insert.push({
-                    account_id: account.id,
-                    profile,
-                    type: hiscoreType,
-                    level: player.baseLevels[stat],
-                    value: player.stats[stat]
-                });
-            }
-        }
-    }
-
-    if (insert.length > 0) {
-        await db.insertInto('hiscore').values(insert).execute();
-    }
-
-    // todo: batch update query?
-    for (let i = 0; i < update.length; i++) {
-        await db.updateTable('hiscore').set(update[i]).where('account_id', '=', account.id).where('type', '=', update[i].type).where('profile', '=', profile).execute();
-    }
+async function loadAccount(username: string, profile: string) {
+    return await db
+        .selectFrom('account')
+        .leftJoin('account_login', join => join.onRef('account_id', '=', 'id').on('profile', '=', profile))
+        .where('username', '=', username)
+        .selectAll()
+        .executeTakeFirst();
 }
 
 export default class LoginServer {
@@ -201,12 +110,7 @@ export default class LoginServer {
                                 return;
                             }
 
-                            let account = await db
-                                .selectFrom('account')
-                                .leftJoin('account_login', join => join.onRef('account_id', '=', 'id').on('profile', '=', profile))
-                                .where('username', '=', username)
-                                .selectAll()
-                                .executeTakeFirst();
+                            let account = await loadAccount(username, profile);
 
                             if (!Environment.website.registration && !account) {
                                 // register the user automatically
@@ -228,12 +132,7 @@ export default class LoginServer {
                                     })
                                     .executeTakeFirstOrThrow();
 
-                                account = await db
-                                    .selectFrom('account')
-                                    .leftJoin('account_login', join => join.onRef('account_id', '=', 'id').on('profile', '=', profile))
-                                    .where('username', '=', username)
-                                    .selectAll()
-                                    .executeTakeFirst();
+                                account = await loadAccount(username, profile);
                             }
 
                             if (!account || !(await bcrypt.compare(password.toLowerCase(), account.password))) {
@@ -438,12 +337,7 @@ export default class LoginServer {
                             console.error(username, 'Invalid save file');
                         }
 
-                        const account = await db
-                            .selectFrom('account')
-                            .leftJoin('account_login', join => join.onRef('account_id', '=', 'id').on('profile', '=', profile))
-                            .where('username', '=', username)
-                            .selectAll()
-                            .executeTakeFirst();
+                        const account = await loadAccount(username, profile);
 
                         if (account?.account_id) {
                             await db
@@ -479,16 +373,17 @@ export default class LoginServer {
                             await fsp.writeFile(`data/players/${profile}/${username}.sav`, raw);
                         } else {
                             console.error(username, 'Invalid save file');
+                            return;
                         }
+
+                        // hiscores would otherwise only move on a clean logout, so a
+                        // player who never logs off cleanly never appears at all
+                        const account = await loadAccount(username, profile);
+                        await updateHiscores(account, PlayerLoading.load(username, new Packet(raw), null), profile);
                     } else if (type === 'player_force_logout') {
                         const { username } = msg;
 
-                        const account = await db
-                            .selectFrom('account')
-                            .leftJoin('account_login', join => join.onRef('account_id', '=', 'id').on('profile', '=', profile))
-                            .where('username', '=', username)
-                            .selectAll()
-                            .executeTakeFirst();
+                        const account = await loadAccount(username, profile);
 
                         if (account?.account_id) {
                             await db
