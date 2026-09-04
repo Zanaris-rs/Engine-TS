@@ -379,6 +379,7 @@
                 <select id="db-backend">
                     <option value="sqlite">SQLite</option>
                     <option value="mysql">MySQL</option>
+                    <option value="postgres">Postgres</option>
                 </select>
             </div>
 
@@ -402,7 +403,16 @@
         const reloadBtn = document.getElementById('reload');
         const dbBackendEl = document.getElementById('db-backend');
         const presetButtons = document.querySelectorAll('button[data-preset]');
-        const mysqlOnlyDbPaths = new Set(['db.host', 'db.port', 'db.user', 'db.pass', 'db.name']);
+        // every backend keeps db.verbose; the rest are connection settings only one
+        // backend reads, and leaving them editable invites filling in the wrong ones
+        const sharedDbPaths = new Set(['db.verbose']);
+        const backendDbPaths = {
+            sqlite: new Set(),
+            mysql: new Set(['db.host', 'db.port', 'db.user', 'db.pass', 'db.name']),
+            // DATABASE_URL in the environment wins over db.url; the field is here
+            // for single-host setups that have nowhere else to put it
+            postgres: new Set(['db.url'])
+        };
 
         let currentConfig = null;
         let defaultsConfig = null;
@@ -515,19 +525,16 @@
         }
 
         function updateDatabaseFieldState() {
-            const mysqlSelected = dbBackendEl.value === 'mysql';
+            const enabled = backendDbPaths[dbBackendEl.value] || new Set();
             const inputs = dbFormEl.querySelectorAll('input[data-path]');
 
             for (const input of inputs) {
-                const isMysqlOnly = mysqlOnlyDbPaths.has(input.dataset.path);
-                if (!isMysqlOnly) {
-                    continue;
-                }
+                const isEnabled = sharedDbPaths.has(input.dataset.path) || enabled.has(input.dataset.path);
 
-                input.disabled = !mysqlSelected;
+                input.disabled = !isEnabled;
                 const row = input.closest('.row');
                 if (row) {
-                    row.classList.toggle('is-disabled', !mysqlSelected);
+                    row.classList.toggle('is-disabled', !isEnabled);
                 }
             }
         }

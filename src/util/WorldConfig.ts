@@ -51,6 +51,7 @@ export interface WorldConfig {
     };
     db: {
         backend: string;
+        url: string;
         host: string;
         port: number;
         user: string;
@@ -125,6 +126,9 @@ export function createDefaultWorldConfig(): WorldConfig {
         },
         db: {
             backend: 'sqlite',
+            // postgres only, and only as a fallback: DATABASE_URL wins, so the
+            // hub can keep its credentials in /etc/lostcity/hub.env
+            url: '',
             host: 'localhost',
             port: 3306,
             user: 'root',
@@ -260,6 +264,7 @@ function migrateFromLegacyEnv(defaults: WorldConfig, env: Record<string, string>
     config.logger.port = tryParseInt(env.LOGGER_PORT, config.logger.port);
 
     config.db.backend = tryParseString(env.DB_BACKEND, config.db.backend);
+    config.db.url = tryParseString(env.DB_URL, config.db.url);
     config.db.host = tryParseString(env.DB_HOST, config.db.host);
     config.db.port = tryParseInt(env.DB_PORT, config.db.port);
     config.db.user = tryParseString(env.DB_USER, config.db.user);
@@ -283,7 +288,17 @@ export function saveWorldConfig(config: WorldConfig) {
     fs.writeFileSync(worldConfigPath, JSON.stringify(config, null, 4) + '\n');
 }
 
+/**
+ * The env var is overlaid here rather than in loadWorldConfig() on purpose: the
+ * setup UI reads the config with GET and writes it straight back with PUT, so a
+ * secret merged into the config object would be persisted into
+ * data/config/world.json on the next save.
+ */
 export function getDatabaseUrl(config: WorldConfig): string {
+    if (config.db.backend === 'postgres') {
+        return process.env.DATABASE_URL ?? config.db.url;
+    }
+
     const user = encodeURIComponent(config.db.user);
     const pass = encodeURIComponent(config.db.pass);
     return `mysql://${user}:${pass}@${config.db.host}:${config.db.port}/${config.db.name}`;
