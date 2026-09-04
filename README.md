@@ -100,6 +100,44 @@ from `prisma/postgres/schema.prisma`.
 `npm run db:smoke` runs every shape of query the login and friend servers issue
 against the configured backend, then deletes what it made.
 
+#### The regenerated sqlite baseline
+
+The registration columns (`email`, `email_normalized`, `registration_group`,
+`signup_agent_hash`, `playable_after`, plus the `signup_attempt` table and its
+indexes) were added to the sqlite baseline **in place**, editing
+`20251229170623_clean` rather than adding a migration after it. That is
+deliberate: `ec2-setup/build.sh` seeds a new host from exactly one migration
+directory, so sqlite has to stay a single file. mysql, which has no such
+constraint, got the additive `20260904000000_registration_columns` instead.
+
+The cost is that the file's checksum changed, so a `db.sqlite` created before
+this branch fails `prisma migrate deploy` with a **"migration modified after it
+was applied"** error. Two ways out:
+
+```bash
+# 1. dev databases: throw it away and migrate from scratch
+rm db.sqlite && npm run sqlite:migrate
+```
+
+```bash
+# 2. a database with data in it: apply the new columns by hand, then tell
+#    prisma the baseline is already applied at its new checksum
+sqlite3 db.sqlite < <the ALTER TABLE / CREATE TABLE statements>
+npx prisma migrate resolve --applied 20251229170623_clean \
+    --schema prisma/singleworld/schema.prisma
+```
+
+For option 2 the statements to run are the `email`, `email_normalized`,
+`registration_group`, `signup_agent_hash` and `playable_after` columns as
+`ALTER TABLE account ADD COLUMN ...`, then the `signup_attempt` table and the
+five indexes — all of them visible in the diff of that migration. `email` and
+`email_normalized` are `NOT NULL` with no default, so an existing table needs
+them added with `DEFAULT ''` (sqlite's `ALTER TABLE ADD COLUMN` requires it)
+and back-filled.
+
+The postgres side has no baseline problem: `0_init` was never edited, and the
+later change to `accounts.register` is its own migration, `1_register_caps`.
+
 ## Dependencies
 
 - [Node.js 24+](https://nodejs.org)
