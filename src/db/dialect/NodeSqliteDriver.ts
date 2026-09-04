@@ -80,6 +80,8 @@ class NodeSqliteConnection implements DatabaseConnection {
     }
 
     async executeQuery<O>(compiledQuery: CompiledQuery): Promise<QueryResult<O>> {
+        let lastError: unknown;
+
         for (let retry = 0; retry < 3; retry++) {
             try {
                 const { sql, parameters } = compiledQuery;
@@ -100,6 +102,8 @@ class NodeSqliteConnection implements DatabaseConnection {
                     rows: []
                 };
             } catch (err) {
+                lastError = err;
+
                 if (isSqliteBusyError(err)) {
                     await sleep(100);
                     continue;
@@ -113,12 +117,10 @@ class NodeSqliteConnection implements DatabaseConnection {
             }
         }
 
+        // an empty result reads as "no rows" to the caller, which produces wrong
+        // answers (e.g. "no such account") instead of a retryable failure
         console.warn('executeQuery failed');
-        return {
-            insertId: 0n,
-            numAffectedRows: 0n,
-            rows: []
-        };
+        throw lastError;
     }
 
     async *streamQuery<R>(compiledQuery: CompiledQuery): AsyncIterableIterator<QueryResult<R>> {
