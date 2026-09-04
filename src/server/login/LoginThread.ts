@@ -1,4 +1,5 @@
 import fs from 'fs';
+import { setTimeout as sleep } from 'node:timers/promises';
 import { parentPort } from 'worker_threads';
 
 import { LoginClient } from '#/server/login/LoginClient.js';
@@ -34,7 +35,11 @@ async function handleRequests(parentPort: ParentPort, msg: any) {
     switch (type) {
         case 'world_startup': {
             if (Environment.login.enabled) {
-                await client.worldStartup();
+                // world_startup clears this world's stale account_login rows, so keep
+                // retrying until the login server is actually up to receive it
+                while (!(await client.worldStartup())) {
+                    await sleep(5000);
+                }
             }
             break;
         }
