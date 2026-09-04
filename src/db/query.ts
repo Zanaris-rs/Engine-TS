@@ -4,6 +4,7 @@ import { createPool } from 'mysql2';
 import { DatabaseSync } from 'node:sqlite';
 
 import { DB } from '#/db/types.js';
+import { toSqlDateTime } from '#/db/DateFormat.js';
 import { NodeSqliteDialect } from '#/db/dialect/NodeSqliteDialect.js';
 import Environment from '#/util/Environment.js';
 
@@ -46,5 +47,5 @@ export function toDbDate(date: Date | string | number) {
         date = new Date(date);
     }
 
-    return date.toISOString().slice(0, 19).replace('T', ' ');
+    return toSqlDateTime(date);
 }

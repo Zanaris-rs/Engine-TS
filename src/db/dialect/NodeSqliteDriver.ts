@@ -3,6 +3,8 @@ import type { DatabaseSync, SQLInputValue } from 'node:sqlite';
 
 import { CompiledQuery, type DatabaseConnection, type Driver, type QueryResult } from 'kysely';
 
+import { toSqlDateTime } from '#/db/DateFormat.js';
+
 import type { NodeSqliteDialectConfig } from './NodeSqliteDialectConfig.js';
 
 type NodeSqliteError = Error & {
@@ -19,8 +21,27 @@ function isSqliteError(err: unknown): err is NodeSqliteError {
     return typeof err === 'object' && err !== null && (err as NodeSqliteError).code === 'ERR_SQLITE_ERROR';
 }
 
-function bindParameters(parameters: readonly unknown[]): SQLInputValue[] {
-    return parameters as SQLInputValue[];
+/**
+ * `node:sqlite` binds null, number, bigint, string and Uint8Array and throws on
+ * anything else. Kysely happily hands us booleans and Dates (the shared schema
+ * types describe both), so coerce them here rather than at every call site.
+ */
+export function bindParameters(parameters: readonly unknown[]): SQLInputValue[] {
+    const bind: SQLInputValue[] = new Array(parameters.length);
+
+    for (let i = 0; i < parameters.length; i++) {
+        const value = parameters[i];
+
+        if (typeof value === 'boolean') {
+            bind[i] = value ? 1 : 0;
+        } else if (value instanceof Date) {
+            bind[i] = toSqlDateTime(value);
+        } else {
+            bind[i] = value as SQLInputValue;
+        }
+    }
+
+    return bind;
 }
 
 export class NodeSqliteDriver implements Driver {
