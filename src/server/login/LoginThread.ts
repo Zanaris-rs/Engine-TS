@@ -4,6 +4,7 @@ import { parentPort } from 'worker_threads';
 
 import { LoginClient } from '#/server/login/LoginClient.js';
 import Environment from '#/util/Environment.js';
+import { printError, printInfo } from '#/util/Logger.js';
 
 import { type GenericLoginThreadResponse } from './index.d.js';
 import { trackLoginAttempts, trackLoginTime } from './LoginMetrics.js';
@@ -36,9 +37,25 @@ async function handleRequests(parentPort: ParentPort, msg: any) {
         case 'world_startup': {
             if (Environment.login.enabled) {
                 // world_startup clears this world's stale account_login rows, so keep
-                // retrying until the login server is actually up to receive it
+                // retrying until the login server is actually up to receive it.
+                //
+                // Say so once. The loop is silent otherwise on purpose - a few retries
+                // are normal while a fleet comes up - but a world stuck here logs
+                // "World ready" and then refuses every login with nothing in the
+                // journal to explain it. One line on the way down, one on the way back.
+                let failedAttempts = 0;
+
                 while (!(await client.worldStartup())) {
+                    if (failedAttempts === 0) {
+                        printError('Login server unreachable, retrying world_startup every 5s');
+                    }
+
+                    failedAttempts++;
                     await sleep(5000);
+                }
+
+                if (failedAttempts > 0) {
+                    printInfo(`Login server reachable, world_startup accepted after ${failedAttempts} failed attempt(s)`);
                 }
             }
             break;
