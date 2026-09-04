@@ -10,9 +10,11 @@ import Environment from '#/util/Environment.js';
 let dialect: Dialect;
 
 if (Environment.db.backend === 'sqlite') {
-    dialect = new NodeSqliteDialect({
-        database: new DatabaseSync('db.sqlite')
-    });
+    // the login server and friend server are separate processes sharing one file
+    const database = new DatabaseSync('db.sqlite');
+    database.exec('PRAGMA journal_mode=WAL; PRAGMA busy_timeout=5000; PRAGMA synchronous=NORMAL;');
+
+    dialect = new NodeSqliteDialect({ database });
 } else {
     dialect = new MysqlDialect({
         pool: async () =>
