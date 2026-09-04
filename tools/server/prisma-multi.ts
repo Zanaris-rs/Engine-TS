@@ -94,8 +94,26 @@ if (postgres && resetting && process.env.ALLOW_DESTRUCTIVE_RESET !== '1') {
  * connection; everywhere else gets an encrypted one and a warning, rather than
  * a migration that cannot run at all.
  */
+const UNVERIFIED_WARNING = ['WARNING: the migration connection is encrypted, but the database certificate is NOT verified.', "WARNING: set DATABASE_SSL_STRICT=1 to verify it, on a host that trusts the database's root CA."];
+
+function warnUnverified() {
+    for (const line of UNVERIFIED_WARNING) {
+        console.warn(line);
+    }
+}
+
 function withTlsParameters(url: string): string {
-    const parsed = new URL(url);
+    let parsed: URL;
+
+    try {
+        parsed = new URL(url);
+    } catch {
+        // never rethrow: node puts the whole string in the error's `input`
+        // property, and that string is the database password
+        console.error('The database url is not a valid url, so prisma cannot be given TLS settings for it.');
+        console.error('Percent-encode any @ : / ? # or % in the password (% is %25), then try again.');
+        process.exit(1);
+    }
 
     parsed.searchParams.set('sslmode', 'require');
 
@@ -110,8 +128,7 @@ function withTlsParameters(url: string): string {
 
         console.log(`Verifying the database certificate${ca ? ` against ${path.resolve(ca)}` : ' against the platform trust store'}.`);
     } else {
-        console.warn('The migration connection is encrypted but the certificate is NOT verified.');
-        console.warn("Set DATABASE_SSL_STRICT=1 to verify it, on a host that trusts the database's root CA.");
+        warnUnverified();
     }
 
     return parsed.toString();
@@ -119,16 +136,26 @@ function withTlsParameters(url: string): string {
 
 const prismaCli = path.join(process.cwd(), 'node_modules', 'prisma', 'build', 'index.js');
 
+const url = postgres ? withTlsParameters(databaseUrl) : databaseUrl;
+const unverified = postgres && process.env.DATABASE_SSL_STRICT !== '1';
+
 const result = child_process.spawnSync(process.execPath, [prismaCli, ...args], {
     stdio: 'inherit',
     env: {
         ...process.env,
-        DATABASE_URL: postgres ? withTlsParameters(databaseUrl) : databaseUrl
+        DATABASE_URL: url
     }
 });
 
 if (result.error) {
     throw result.error;
+}
+
+// again at the end: prisma is chatty, and the one line that matters had already
+// scrolled off by the time anyone read the output
+if (unverified) {
+    console.warn('');
+    warnUnverified();
 }
 
 process.exit(result.status ?? 1);
