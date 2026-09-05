@@ -1,4 +1,5 @@
 // stdlib
+import { randomUUID } from 'crypto';
 import fs from 'fs';
 import { Worker } from 'worker_threads';
 
@@ -49,6 +50,7 @@ import Player from '#/engine/entity/Player.js';
 import { PlayerLoading } from '#/engine/entity/PlayerLoading.js';
 import { EntityQueueState, PlayerQueueType } from '#/engine/entity/PlayerQueueRequest.js';
 import { PlayerStat } from '#/engine/entity/PlayerStat.js';
+import type { InputChunk } from '#/engine/entity/tracking/InputRing.js';
 import { SessionLog } from '#/engine/entity/tracking/SessionLog.js';
 import { WealthTransactionEvent, WealthEvent } from '#/engine/entity/tracking/WealthEvent.js';
 import GameMap, { changeLocCollision, changeNpcCollision, changeBlockCollision, changePlayerOccCollision } from '#/engine/GameMap.js';
@@ -127,6 +129,12 @@ class World {
     private static readonly AFK_EVENTRATE: number = 500; // 5m: 60/5 = 12 chances per hour
     private static readonly AFK_CHANCE1: number = 1 / (120 / 5); // 1/24 - 4% chance every 5 mins: avg 1 event every 2 hrs
     private static readonly AFK_CHANCE2: number = 1 / (60 / 5); // 1/12 - 8% chance every 5 mins: avg 1 event every 1 hr while "aggro zone" hasn't changed
+
+    /** How long a macro or bug-abuse report watches the offender for. */
+    private static readonly REPORT_TRACK_MS: number = 15 * 60 * 1000;
+
+    /** How long a relayed `track` watches for; nothing expires it but time. */
+    private static readonly RELAY_TRACK_MS: number = 30 * 60 * 1000;
 
     private static readonly TIMEOUT_NO_CONNECTION: number = 50; // 30s with no connection (16 ticks in osrs)
     private static readonly TIMEOUT_NO_RESPONSE: number = 100; // 60s without any response
@@ -2057,7 +2065,14 @@ class World {
 
                 const player = this.getPlayerByUsername(username);
                 if (player) {
-                    player.input.active = state;
+                    if (state) {
+                        // there is no report behind a relayed track, so it gets
+                        // an evidence key of its own: whoever asked for it wants
+                        // the stream, and `report_input` is where the stream goes
+                        this.beginInputCapture(player, randomUUID(), Date.now(), World.RELAY_TRACK_MS);
+                    } else {
+                        player.input.untrack();
+                    }
                 }
             } else if (opcode === FriendsServerOpcodes.RELAY_RELOAD) {
                 this.reload(false);
@@ -2343,8 +2358,9 @@ class World {
         if (reason === ReportAbuseReason.MACROING || reason === ReportAbuseReason.BUG_ABUSE) {
             const offenderPlayer = this.getPlayerByUsername(offender);
             if (offenderPlayer) {
-                // Immediately turn on tracking when a user is reported as macroing or abusing a bug.
-                offenderPlayer.input.active = true;
+                // the ring already holds the minutes before this moment; the
+                // tail records the ones after it
+                this.beginInputCapture(offenderPlayer, randomUUID(), Date.now(), World.REPORT_TRACK_MS);
             }
         }
         // to the login thread, not the logger: the logger server is disabled on
@@ -2361,12 +2377,47 @@ class World {
         });
     }
 
-    submitInputTracking(player: Player, buf: Uint8Array) {
+    /**
+     * One finished chunk of a player's input, on its way to `report_input`.
+     *
+     * `kind` is where it came from: `ring` for a chunk that was already in the
+     * player's ring when the report landed - the minutes before it, which is
+     * the half that used never to exist - and `live` for one captured after.
+     * Everything the logger server needs to file the row and to copy the chat
+     * window rides along, so it never has to ask the login server anything.
+     */
+    /**
+     * Point a player's input ring at a report and start the live tail. The ring
+     * is drained inside `track()`, so the chunks from before this instant are
+     * on their way before the first live one is.
+     */
+    private beginInputCapture(player: Player, uuid: string, reportAt: number, trackMs: number) {
+        player.input.track(reportAt + trackMs, {
+            uuid,
+            reportAt,
+            accountId: player.account_id > 0 ? player.account_id : null
+        });
+    }
+
+    submitInputTracking(player: Player, chunk: InputChunk, kind: 'ring' | 'live') {
+        const capture = player.input.capture;
+
+        if (!capture) {
+            return;
+        }
+
         this.loggerThread.postMessage({
-            type: 'input_track',
-            session_uuid: player.session,
-            timestamp: Date.now(),
-            buf: Buffer.from(buf).toString('base64')
+            type: 'report_evidence',
+            kind: 'input',
+            report_uuid: capture.uuid,
+            report_at: capture.reportAt,
+            offender_account_id: capture.accountId,
+            capture: kind,
+            seq: chunk.seq,
+            started_at: chunk.startedAt,
+            flushed_at: chunk.flushedAt,
+            client: player.clientKind,
+            data: Buffer.from(chunk.bytes).toString('base64')
         });
     }
 

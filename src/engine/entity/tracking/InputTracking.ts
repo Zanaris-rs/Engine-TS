@@ -1,101 +1,120 @@
 import World from '#/engine/World.js';
 
 import Player from '#/engine/entity/Player.js';
-
-import Packet from '#/io/Packet.js';
+import InputRing from '#/engine/entity/tracking/InputRing.js';
 
 import EventAppletFocus from '#/network/game/client/model/EventAppletFocus.js';
 import EventCameraPosition from '#/network/game/client/model/EventCameraPosition.js';
 import EventMouseClick from '#/network/game/client/model/EventMouseClick.js';
 import EventMouseMove from '#/network/game/client/model/EventMouseMove.js';
 
-enum InputTrackingEvent {
-    CAMERA_POSITION = 1,
-    APPLET_FOCUS,
-    MOUSE_CLICK,
-    MOUSE_MOVE
-}
+/**
+ * A player's mouse and focus stream, on its way to `report_input`.
+ *
+ * This used to be a 5 KB buffer that only filled while `active` was set, and
+ * `active` was only ever set by a macro report - so the evidence began after
+ * the report and the minutes that caused it were never recorded. Recording is
+ * always on now: every packet goes into an {@link InputRing}, which keeps the
+ * last sixteen chunks (roughly ten minutes) and throws the rest away.
+ *
+ * A report drains that ring into the database and starts a live tail; nothing
+ * else ever leaves this process. `World` owns the report identity and the
+ * transport, so all this class does is hand the ring the tick and the clock,
+ * and route finished chunks.
+ */
+/**
+ * What a capture is filed under. All three travel with every chunk, because
+ * the logger server writes the rows and copies the chat window without ever
+ * asking the login server anything - the two hub processes need no ordering
+ * between them, which is the whole point of the world generating the uuid.
+ */
+export type InputCapture = {
+    uuid: string;
+    reportAt: number;
+    accountId: number | null;
+};
 
 export default class InputTracking {
     private readonly player: Player;
-    private softLimit: number = 1500;
+    private readonly ring: InputRing;
 
-    active: boolean = false;
-    buf: Packet = Packet.alloc(1);
+    /**
+     * The report this player's evidence belongs to, set when the tail starts.
+     * A chunk cannot be filed without one, which is why a chunk sealed while
+     * nobody has reported the player is never submitted anywhere.
+     */
+    capture: InputCapture | null = null;
 
     constructor(player: Player) {
         this.player = player;
+        this.ring = new InputRing(chunk => World.submitInputTracking(this.player, chunk, 'live'));
+    }
+
+    /** Is a live tail running? */
+    isTracked(): boolean {
+        return this.ring.isTracked(Date.now());
+    }
+
+    /** When the live tail ends, as epoch ms; 0 when nothing is being tracked. */
+    get activeUntil(): number {
+        return this.ring.activeUntil;
     }
 
     onCycle(): void {
-        if (this.buf.pos >= this.softLimit) {
-            this.flush();
+        this.ring.onCycle(Date.now());
+    }
+
+    /**
+     * Start (or extend) a capture. Everything the ring is holding is submitted
+     * first, oldest chunk first, so the evidence starts before the report and
+     * not after it; the tail that follows arrives chunk by chunk as it rotates.
+     */
+    track(untilMs: number, capture: InputCapture): void {
+        const now = Date.now();
+
+        this.capture = capture;
+        this.ring.track(untilMs, World.currentTick, now);
+
+        for (const chunk of this.ring.drainRing()) {
+            World.submitInputTracking(this.player, chunk, 'ring');
         }
     }
 
-    flush(): void {
-        if (!this.active) {
-            return;
-        }
+    /** Stop early. What the tail had collected is still submitted. */
+    untrack(): void {
+        this.ring.untrack(Date.now());
+    }
 
-        if (this.buf.pos > 0) {
-            World.submitInputTracking(this.player, this.buf.data.subarray(0, this.buf.pos));
-        }
-
-        this.buf.pos = 0;
+    /**
+     * Logging out. Anything captured under a live tail is worth keeping;
+     * anything the ring is holding is not - the player was not reported, and
+     * their idle mouse is nobody's business.
+     */
+    cleanup(): void {
+        this.ring.untrack(Date.now());
+        this.ring.clear();
+        this.capture = null;
     }
 
     cameraPosition(event: EventCameraPosition) {
-        if (!this.active) {
-            return;
-        }
-
-        if (this.buf.pos + 5 >= this.buf.length) {
-            this.flush();
-        }
-
-        this.buf.p1(InputTrackingEvent.CAMERA_POSITION);
-        this.buf.p2(event.pitch);
-        this.buf.p2(event.yaw);
+        this.ring.cameraPosition(World.currentTick, Date.now(), event.pitch, event.yaw);
     }
 
     appletFocus(event: EventAppletFocus) {
-        if (!this.active) {
-            return;
-        }
-
-        if (this.buf.pos + 2 >= this.buf.length) {
-            this.flush();
-        }
-
-        this.buf.p1(InputTrackingEvent.APPLET_FOCUS);
-        this.buf.p1(event.focus);
+        this.ring.appletFocus(World.currentTick, Date.now(), event.focus);
     }
 
     mouseClick(event: EventMouseClick) {
-        if (!this.active) {
-            return;
-        }
-
-        if (this.buf.pos + 5 >= this.buf.length) {
-            this.flush();
-        }
-
-        this.buf.p1(InputTrackingEvent.MOUSE_CLICK);
-        this.buf.p4(event.info);
+        this.ring.mouseClick(World.currentTick, Date.now(), event.info);
     }
 
+    /**
+     * The old cap was 160 bytes, which threw away perfectly ordinary packets:
+     * the TS client sends up to 243 and the record's length field is a `p1`,
+     * so 255 is the real limit. The ring counts the two-byte header itself and
+     * leaves marker 1 behind when it does have to drop one.
+     */
     mouseMove(event: EventMouseMove) {
-        if (!this.active || event.data.length === 0 || event.data.length > 160) {
-            return;
-        }
-
-        if (this.buf.pos + event.data.length >= this.buf.length) {
-            this.flush();
-        }
-
-        this.buf.p1(InputTrackingEvent.MOUSE_MOVE);
-        this.buf.p1(event.data.length);
-        this.buf.pdata(event.data, 0, event.data.length);
+        this.ring.mouseMove(World.currentTick, Date.now(), event.data);
     }
 }

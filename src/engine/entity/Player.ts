@@ -312,6 +312,7 @@ export default class Player extends PathingEntity {
     uid: number = -1;
     reconnecting: boolean = false;
     lowMemory: boolean = false;
+    /** Set at load time when the socket is a WSClientSocket. See `clientKind`. */
     webClient: boolean = false;
     combatLevel: number = 3;
     skillLevel: number = 0;
@@ -474,7 +475,7 @@ export default class Player extends PathingEntity {
         this.lastAppearance = 0;
         this.appearanceBuf = null;
         this.isActive = false;
-        this.input.flush();
+        this.input.cleanup();
     }
 
     resetEntity(respawn: boolean) {
@@ -1325,6 +1326,16 @@ export default class Player extends PathingEntity {
 
     processInputTracking(): void {
         this.input.onCycle();
+    }
+
+    /**
+     * Which client this player is on, as `report_input.client` records it. It
+     * matters to whoever reads the evidence: the Java client only ever sends
+     * one move record per packet, so the spatial signals a macro verdict leans
+     * on are not available for it.
+     */
+    get clientKind(): 'web' | 'java' {
+        return this.webClient ? 'web' : 'java';
     }
 
     // ----
