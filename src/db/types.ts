@@ -63,6 +63,12 @@ export type input_report = {
 export type ipban = {
     ip: string;
 };
+export type login_attempt = {
+    id: Generated<number>;
+    username: string;
+    ip: string;
+    created_at: Generated<Timestamp>;
+};
 export type private_chat = {
     id: Generated<number>;
     account_id: number;
@@ -131,6 +137,7 @@ export type DB = {
     ignorelist: ignorelist;
     input_report: input_report;
     ipban: ipban;
+    login_attempt: login_attempt;
     private_chat: private_chat;
     public_chat: public_chat;
     report: report;
