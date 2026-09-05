@@ -366,7 +366,11 @@ logs which one it read.
 
 A save that cannot be read **stops the run** rather than being skipped, because
 every item in it would otherwise read as having left the game. Fix or remove the
-file, or pass `--skip-unreadable` once you have looked at it.
+file, or pass `--skip-unreadable` once you have looked at it. A save the
+*filesystem* refuses counts as unreadable rather than ending the run with a
+stack trace — one deleted between the directory listing and the read (a player
+logged out while the census was walking), or one this process may not open. A
+bad file costs that file, not the hour.
 
 A save **written in the last second** is not read yet and not skipped either:
 the login server writes saves in place rather than by rename, so a file touched
@@ -377,13 +381,23 @@ changed *while* it was being read gets the same treatment, since the mtime
 window alone cannot see that. Only a save still being written after every
 attempt is left out, and then it counts as a save that could not be read.
 
-In either of those cases the run says `63 players (62 censused)` and **writes no
-`economy_flow` rows at all** - the totals in the snapshot are still worth
-having, but a census that missed a save cannot tell a bank that emptied from a
-save it did not read. A directory with no saves in it, or none readable, writes
-nothing whatsoever and exits cleanly: "the game contains nothing" is nearly
-always "this ran in the wrong directory", and recording it would make the next
-census report the entire game as having entered it that hour.
+**Either of those stops the run**, and for the same reason: an incomplete
+census writes **nothing at all** unless `--skip-unreadable` says otherwise. A
+snapshot short of one player's bank is not a floor worth having — it sits on
+`/economy` as though it were the game, and the next complete run then reads as
+a spike of everything that file was holding.
+
+With the flag the snapshot is written and **no `economy_flow` rows at all**
+are, because having looked at the files does not make their items countable:
+the change since the last census still cannot be told apart from a bank that
+emptied. The run says `63 players (62 censused)` so the shortfall is on the
+record, and the closing line names the flag that let it through.
+
+A directory with no saves in it writes nothing whatsoever and exits cleanly —
+and so does one where nothing at all was readable, once you have passed the
+flag. "The game contains nothing" is nearly always "this ran in the wrong
+directory", and recording it would make the next census report the entire game
+as having entered it that hour.
 
 The **filename of an unreadable save is a username**, so it goes to the
 operator's stderr - the systemd journal on the hub - and nowhere else. Nothing

@@ -43,7 +43,14 @@ export interface CensusResult {
     censused: number;
     /** how many of those needed a second look before they settled */
     settled: number;
-    /** `<file>: <why>` - for the operator's eyes only, these name accounts */
+    /**
+     * `<file>: <why>` - for the operator's eyes only, these name accounts.
+     *
+     * A save whose contents the reader refused, and also one the filesystem
+     * refused: a file that vanished between the readdir and the read, one this
+     * process may not open, a disk that went away. Both are the same fact as
+     * far as a census is concerned - a player whose items were not counted.
+     */
     unreadable: string[];
     /** files still being written after every attempt - names, likewise */
     unsettled: string[];
@@ -107,6 +114,48 @@ export async function censusSaves(dir: string, invs: InvLookup, options: CensusO
         }
     };
 
+    /**
+     * One attempt at one file. `false` means "come back later" - it is still
+     * being written; `true` means it is finished with, either summed or
+     * recorded as unreadable.
+     *
+     * Everything the filesystem can raise lands in `unreadable` rather than
+     * out of this function: a save deleted between the readdir and the stat
+     * (ENOENT - the player logged out and the login server moved it, or an
+     * operator did), a file this process may not open, a disk that went away
+     * mid-read. One of those used to end the whole run with a stack trace and
+     * no census at all, which is the wrong trade by a distance - the caller
+     * already knows what a census that missed a file means, and already refuses
+     * to write flow rows for one. An hour with one bad file should cost that
+     * file, not the hour.
+     */
+    const attempt = (name: string, retried: boolean): boolean => {
+        const file = path.join(dir, name);
+
+        try {
+            const read = readSettled(file, settleMs);
+
+            if (!read) {
+                // its mtime is still the reason to come back, and it is read
+                // again below rather than left out of the census
+                note(fs.statSync(file).mtimeMs);
+                return false;
+            }
+
+            note(read.mtimeMs);
+
+            if (retried) {
+                result.settled++;
+            }
+
+            sum(name, read.data);
+        } catch (err) {
+            result.unreadable.push(`${name}: ${(err as Error).message}`);
+        }
+
+        return true;
+    };
+
     let pending: string[] = [];
 
     for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
@@ -116,35 +165,20 @@ export async function censusSaves(dir: string, invs: InvLookup, options: CensusO
 
         result.players++;
 
-        const read = readSettled(path.join(dir, entry.name), settleMs);
-        if (!read) {
-            // its mtime is still the reason to come back, and it is read again
-            // below rather than left out of the census
-            note(fs.statSync(path.join(dir, entry.name)).mtimeMs);
+        if (!attempt(entry.name, false)) {
             pending.push(entry.name);
-            continue;
         }
-
-        note(read.mtimeMs);
-        sum(entry.name, read.data);
     }
 
-    for (let attempt = 1; attempt <= attempts && pending.length > 0; attempt++) {
-        options.onWait?.(pending.length, attempt, waitMs);
+    for (let round = 1; round <= attempts && pending.length > 0; round++) {
+        options.onWait?.(pending.length, round, waitMs);
         await sleep(waitMs);
 
         const stillPending: string[] = [];
         for (const name of pending) {
-            const read = readSettled(path.join(dir, name), settleMs);
-            if (!read) {
-                note(fs.statSync(path.join(dir, name)).mtimeMs);
+            if (!attempt(name, true)) {
                 stillPending.push(name);
-                continue;
             }
-
-            note(read.mtimeMs);
-            result.settled++;
-            sum(name, read.data);
         }
 
         pending = stillPending;

@@ -133,6 +133,53 @@ test('an unreadable save is reported by name and censused as nothing', async () 
     assert.match(census.unreadable[0], /^corrupt\.sav: Invalid save file$/);
 });
 
+// root opens anything, so the permission half of this only means something as
+// an ordinary user. The ENOENT half below is unconditional.
+const asRoot = process.getuid?.() === 0;
+
+test('a save this process may not open is unreadable, not the end of the run', { skip: asRoot ? 'running as root' : false }, async () => {
+    const dir = tempDir();
+    settledSave(dir, 'alpha.sav');
+    settledSave(dir, 'locked.sav');
+    settledSave(dir, 'omega.sav');
+
+    // stat still answers, so the settle check passes and the read is the thing
+    // that fails - which used to come out of censusSaves as a stack trace with
+    // no census behind it at all
+    fs.chmodSync(path.join(dir, 'locked.sav'), 0o000);
+
+    const census = await censusSaves(dir, packInvs);
+
+    // the directory listing counted it, so it is a player who was not censused
+    assert.equal(census.players, 3);
+    assert.equal(census.censused, 2, 'the other two are still counted');
+    assert.equal(census.items.get(995), FIXTURE_COINS * 2);
+
+    assert.equal(census.unreadable.length, 1);
+    assert.match(census.unreadable[0], /^locked\.sav: EACCES/);
+    assert.deepEqual(census.unsettled, []);
+});
+
+test('a file that vanishes while it is being waited on is unreadable too', async () => {
+    const dir = tempDir();
+    settledSave(dir, 'alpha.sav');
+    // written this instant, so it is set aside for the settle window
+    fs.writeFileSync(path.join(dir, 'beta.sav'), V7);
+
+    const census = await censusSaves(dir, packInvs, {
+        settleMs: 120,
+        waitMs: 140,
+        // ...and it goes away before the retry looks at it again
+        onWait: () => fs.rmSync(path.join(dir, 'beta.sav'))
+    });
+
+    assert.equal(census.players, 2);
+    assert.equal(census.censused, 1);
+    assert.equal(census.unreadable.length, 1);
+    assert.match(census.unreadable[0], /^beta\.sav: ENOENT/);
+    assert.deepEqual(census.unsettled, [], 'it is not still pending: it is gone');
+});
+
 test('the newest save mtime covers files that were waited on', async () => {
     const dir = tempDir();
     settledSave(dir, 'alpha.sav');

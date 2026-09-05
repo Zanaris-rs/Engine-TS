@@ -33,7 +33,8 @@ const USAGE = `Usage:
   --dry-run           count and print, write nothing (and open no database)
   --profile <name>    census this profile instead of node.profile
   --players <dir>     census this directory instead of data/players/<profile>
-  --skip-unreadable   write the census even though some saves could not be read`;
+  --skip-unreadable   write the census even though some saves were missed
+                      (unreadable, or still being written); no flow rows`;
 
 /** The engine's own tree, whatever cwd the census was started from. */
 const ENGINE_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
@@ -213,12 +214,6 @@ if (counted.unreadable.length > 0) {
     for (const line of counted.unreadable) {
         console.error(`[economy] unreadable save ${line}`);
     }
-
-    if (!skipUnreadable) {
-        // a census missing somebody's bank is not a small census, it is a wrong
-        // one: every item in that file would read as having left the game
-        fail(`[economy] ${counted.unreadable.length} of ${counted.players} saves could not be read; nothing written. Pass --skip-unreadable to census the rest anyway.`);
-    }
 }
 
 if (counted.settled > 0) {
@@ -233,16 +228,34 @@ if (counted.unsettled.length > 0) {
     }
 }
 
+// A census that missed a save is missing whatever was in it, and the two ways
+// to miss one are the same fact: a file that could not be read at all, and a
+// file still being written after every attempt. Either way the items in it are
+// uncounted, so the *change* since the last census cannot be told apart from a
+// bank that emptied - and the totals are not a floor anybody asked for either.
+// A snapshot short of one player's bank sits on /economy as though it were the
+// game, and the next complete run reads as a spike.
+//
+// So an incomplete run writes nothing unless the operator says otherwise, and
+// `--skip-unreadable` is that: it says "I have looked at those files". The flow
+// rows are still suppressed even then, because looking at the files does not
+// make their items countable.
+const complete = counted.censused === counted.players;
+
+if (!complete && !skipUnreadable) {
+    const missed = counted.players - counted.censused;
+
+    fail(
+        `[economy] ${missed} of ${counted.players} saves could not be censused ` +
+            `(${counted.unreadable.length} unreadable, ${counted.unsettled.length} still being written); nothing written. ` +
+            'Pass --skip-unreadable to census the rest anyway - the snapshot is then written without any flow rows.'
+    );
+}
+
 if (counted.censused === 0) {
     console.log(`[economy] nothing readable in ${path.resolve(playersDir)}; nothing written`);
     process.exit(0);
 }
-
-// a census that missed a save is missing whatever was in it, so the *change*
-// since the last one cannot be told apart from a bank that emptied. The
-// snapshot is still worth having - it is a floor, and the page reads it as
-// totals - but no flow row may come out of it.
-const complete = counted.censused === counted.players;
 
 const items = toCounts(counted.items);
 const trackedCounts = toCounts(
@@ -319,7 +332,7 @@ if (dryRun) {
         const flowed = written.rows.map(flow => `${tracked.items.find(item => item.id === flow.item_id)?.name ?? flow.item_id} ${flow.delta > 0 ? '+' : ''}${flow.delta}`);
         wrote = `${written.rows.length} flow rows (${flowed.join(', ')})`;
     } else if (!complete) {
-        wrote = `no flow rows (${counted.players - counted.censused} of ${counted.players} saves were not censused, so nothing can be said about what changed)`;
+        wrote = `no flow rows (${counted.players - counted.censused} of ${counted.players} saves were not censused and --skip-unreadable was given, so nothing can be said about what changed)`;
     } else if (!written.hadPrevious) {
         wrote = 'no flow rows (first census for this profile: nothing to compare it to)';
     } else {
