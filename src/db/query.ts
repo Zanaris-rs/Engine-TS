@@ -58,6 +58,10 @@ if (Environment.db.backend === 'sqlite') {
                     ca: ca ? fs.readFileSync(ca, 'utf8') : undefined
                 },
                 max: 3,
+                // a stalled statement otherwise holds one of three connections
+                // until TCP keepalive notices, which on a pooled Supabase is
+                // minutes; the website's pool has had one since it was written
+                query_timeout: 10_000,
                 connectionTimeoutMillis: 10_000,
                 idleTimeoutMillis: 60_000,
                 keepAlive: true

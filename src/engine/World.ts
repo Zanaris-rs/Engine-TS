@@ -2486,6 +2486,9 @@ class World {
             this.loggerThread?.postMessage({
                 type: 'evidence_end',
                 report_uuid: state.uuid,
+                // the after-window starts where the before-window stopped, and
+                // the logger has nothing else to work it out from
+                report_at: state.reportAt,
                 offender_account_id: state.accountId,
                 ended_at: now
             });
