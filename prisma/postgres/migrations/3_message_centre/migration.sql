@@ -564,5 +564,5 @@ GRANT EXECUTE ON FUNCTION accounts.staff_reports(text, timestamptz) TO website;
 GRANT EXECUTE ON FUNCTION accounts.register(text, text, text, text, text, text, text) TO website;
 
 -- Deliberately absent, still: any grant at all on schema public or the tables
--- in it. `select * from account_message` as website is refused; the twelve
+-- in it. `select * from account_message` as website is refused; the thirteen
 -- functions above are the whole of what a leaked website credential can do.
