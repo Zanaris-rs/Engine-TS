@@ -8,18 +8,26 @@
  *   npm run account -- find-alts <email|ip|ip-group>
  *   npm run account -- send-notice <name> <subject> <body> [--from <staff>]
  *   npm run account -- tickets [open|closed|all]
+ *   npm run account -- punishments [name]
+ *   npm run account -- lift <name> [--from <staff>]
  *
  * With account.autoCreate off there is no other way to make the first account,
  * and with no mailer there is no other way to recover a lost password. The two
  * message centre commands are the shell-side twin of the website's staff
  * inbox: the same tables, no session and no password re-type, because whoever
  * can run this already has the database.
+ *
+ * `lift` is the shell twin of the website's `staff_lift`, and it is the reason
+ * the operator runbook can stop telling people to unban with raw psql: an
+ * `UPDATE account SET banned_until = NULL` clears the state and leaves the
+ * public record on /bans still saying the player is serving a ban nobody can
+ * find. Lifting is two writes, and this does both.
  */
 import * as bcrypt from 'bcrypt-ts';
 
 import { fromDbDate } from '#/db/DateFormat.js';
 import { db, toDbDate } from '#/db/query.js';
-import { NOTICE_KIND } from '#/server/login/MessageCentre.js';
+import { liftPunishmentsQuery, NOTICE_KIND, punishmentsQuery } from '#/server/login/MessageCentre.js';
 import { checkPassword, checkUsername, ipGroup, isValidEmail, normalizeEmail } from '#/util/Account.js';
 import Environment from '#/util/Environment.js';
 import { toDisplayName, toSafeName } from '#/util/JString.js';
@@ -30,7 +38,9 @@ const USAGE = `Usage:
   account.ts ban-ip <ip>
   account.ts find-alts <email|ip|ip-group>
   account.ts send-notice <name> <subject> <body> [--from <staff>]
-  account.ts tickets [open|closed|all]`;
+  account.ts tickets [open|closed|all]
+  account.ts punishments [name]
+  account.ts lift <name> [--from <staff>]`;
 
 function fail(message: string): never {
     console.error(message);
@@ -55,6 +65,46 @@ function resolveUsername(input: string, force: boolean): string {
     }
 
     return check.username;
+}
+
+/**
+ * `--from <staff>` and the arguments around it, for the two commands that
+ * record who did the thing.
+ *
+ * A trailing `--from` used to be dropped silently, and the notice went out
+ * signed by nobody - the one thing the flag exists to prevent.
+ */
+function takeFrom(args: string[]): { from: string | null; rest: string[] } {
+    const fromIndex = args.indexOf('--from');
+    const from = fromIndex === -1 ? null : args[fromIndex + 1];
+    const rest = fromIndex === -1 ? args : [...args.slice(0, fromIndex), ...args.slice(fromIndex + 2)];
+
+    if (fromIndex !== -1 && !from) {
+        fail(`--from needs a staff username.\n\n${USAGE}`);
+    }
+
+    return { from: from ?? null, rest };
+}
+
+/** The account named by `--from`, or undefined when nobody was named. */
+async function loadActor(from: string | null) {
+    if (!from) {
+        return undefined;
+    }
+
+    const username = resolveUsername(from, true);
+    const actor = await db.selectFrom('account').select(['id', 'username']).where('username', '=', username).executeTakeFirst();
+
+    if (!actor) {
+        fail(`No account called '${username}' to act as.`);
+    }
+
+    return actor;
+}
+
+/** postgres hands back a Date and sqlite a string; fromDbDate reads either. */
+function formatStamp(value: Date | string | null): string {
+    return value === null ? '-' : fromDbDate(value).toISOString().slice(0, 19).replace('T', ' ');
 }
 
 async function createStaff(args: string[]) {
@@ -192,15 +242,7 @@ async function findAlts(args: string[]) {
  * welcome message and the automated bans already do.
  */
 async function sendNotice(args: string[]) {
-    const fromIndex = args.indexOf('--from');
-    const from = fromIndex === -1 ? null : args[fromIndex + 1];
-    const rest = fromIndex === -1 ? args : [...args.slice(0, fromIndex), ...args.slice(fromIndex + 2)];
-
-    // a trailing `--from` used to be dropped silently, and the notice went out
-    // signed by nobody - the one thing the flag exists to prevent
-    if (fromIndex !== -1 && !from) {
-        fail(`--from needs a staff username.\n\n${USAGE}`);
-    }
+    const { from, rest } = takeFrom(args);
 
     const [name, rawSubject, rawBody] = rest;
 
@@ -233,15 +275,7 @@ async function sendNotice(args: string[]) {
         fail(`No account called '${username}'.`);
     }
 
-    let author: { id: number; username: string } | undefined;
-    if (from) {
-        const fromUsername = resolveUsername(from, true);
-        author = await db.selectFrom('account').select(['id', 'username']).where('username', '=', fromUsername).executeTakeFirst();
-
-        if (!author) {
-            fail(`No account called '${fromUsername}' to send it from.`);
-        }
-    }
+    const author = await loadActor(from);
 
     await db
         .insertInto('account_message')
@@ -342,6 +376,95 @@ async function tickets(args: string[]) {
     console.log('Replies go through the website staff inbox, which audits them; this command only reads.');
 }
 
+/**
+ * The permanent record, exactly as /bans shows it. No issuer and no lifter:
+ * those columns exist for a staff audit, and the public page has never named
+ * them - so neither does the shell, and nobody has to remember which of the
+ * two views they are looking at.
+ */
+async function punishments(args: string[]) {
+    const [name] = args;
+
+    let account: { id: number; username: string } | undefined;
+
+    if (name) {
+        const username = resolveUsername(name, true);
+        account = await db.selectFrom('account').select(['id', 'username']).where('username', '=', username).executeTakeFirst();
+
+        if (!account) {
+            fail(`No account called '${username}'.`);
+        }
+    }
+
+    const rows = await punishmentsQuery(db, account?.id ?? null, 50).execute();
+
+    if (rows.length === 0) {
+        console.log(account ? `${toDisplayName(account.username)} has never been banned or muted.` : 'Nothing has been banned or muted.');
+        return;
+    }
+
+    console.log(`${rows.length} punishment(s)${account ? ` for ${toDisplayName(account.username)}` : ''}, newest first:`);
+    for (const row of rows) {
+        // sqlite hands booleans back as 0/1, which is why these test truthiness
+        const by = row.automated ? 'automated' : 'a moderator';
+        const lifted = row.lifted_at ? `lifted ${formatStamp(row.lifted_at)}` : '';
+
+        console.log(
+            `  ${String(row.id).padStart(6)}  ${row.kind.padEnd(4)}  ${toDisplayName(row.username).padEnd(12)}  issued ${formatStamp(row.issued_at)}  until ${formatStamp(row.until)}  ${by.padEnd(11)}  ${lifted}${row.note ? `  "${row.note}"` : ''}`
+        );
+    }
+}
+
+/**
+ * Undo a ban and a mute, both halves of it.
+ *
+ * `account.banned_until` is the state that stops a login; `punishment` is the
+ * record /bans reads. Clearing only the first - which is what unbanning by
+ * hand in psql does - leaves the public page saying somebody is serving a ban
+ * they are not, forever, because nothing ever revisits that row.
+ *
+ * Only punishments still in force are stamped. One that already expired was
+ * not lifted by anybody, and saying otherwise would credit a moderator with
+ * the passage of time.
+ */
+async function lift(args: string[]) {
+    const { from, rest } = takeFrom(args);
+    const [name] = rest;
+
+    if (!name) {
+        fail(USAGE);
+    }
+
+    const username = resolveUsername(name, true);
+
+    const account = await db.selectFrom('account').select(['id', 'username', 'banned_until', 'muted_until']).where('username', '=', username).executeTakeFirst();
+    if (!account) {
+        fail(`No account called '${username}'.`);
+    }
+
+    const actor = await loadActor(from);
+
+    const was = [account.banned_until ? `banned until ${formatStamp(account.banned_until)}` : null, account.muted_until ? `muted until ${formatStamp(account.muted_until)}` : null].filter(Boolean).join(' and ');
+
+    await db.updateTable('account').set({ banned_until: null, muted_until: null }).where('id', '=', account.id).execute();
+
+    const now = new Date();
+    const lifted = await liftPunishmentsQuery(db, account.id, toDbDate(now), actor?.id ?? null, now).executeTakeFirst();
+
+    // the same audit row the website's staff_lift writes, and named for the
+    // door it came in by - see the note on staff_notice_cli above
+    if (actor) {
+        await db.insertInto('staff_action').values({ actor_account_id: actor.id, action: 'staff_lift_cli', target: account.username }).execute();
+    }
+
+    console.log(`Lifted ${toDisplayName(account.username)} (id ${account.id})${actor ? ` as ${toDisplayName(actor.username)}` : ''}: ${was || 'nothing was in force'}.`);
+    console.log(`${Number(lifted?.numUpdatedRows ?? 0)} punishment row(s) marked lifted. They stay on the public record; "lifted" is what changes.`);
+
+    if (!actor) {
+        console.log('No --from, so the record does not say who lifted it. Pass one if this was a person.');
+    }
+}
+
 const [command, ...args] = process.argv.slice(2);
 
 console.log(`Using the ${Environment.db.backend} backend.`);
@@ -364,6 +487,12 @@ switch (command) {
         break;
     case 'tickets':
         await tickets(args);
+        break;
+    case 'punishments':
+        await punishments(args);
+        break;
+    case 'lift':
+        await lift(args);
         break;
     default:
         fail(USAGE);
