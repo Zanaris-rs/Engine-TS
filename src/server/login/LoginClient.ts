@@ -1,6 +1,8 @@
 import InternalClient from '#/server/InternalClient.js';
 import Environment from '#/util/Environment.js';
 
+import { type PlayerReportRequest } from './index.d.js';
+
 export class LoginClient extends InternalClient {
     private nodeId = 0;
 
@@ -157,8 +159,13 @@ export class LoginClient extends InternalClient {
      * has already been thanked by the time this leaves, and a report is not
      * worth blocking a game tick on. The world sends its own id and the
      * reporter's account so the staff inbox can say who and where.
+     *
+     * The whole request travels as one object rather than nine positional
+     * arguments: it is `PlayerReportRequest` minus the discriminator, so the
+     * offender fields the world resolved cannot be dropped on the way through
+     * without the compiler saying so.
      */
-    public async playerReport(accountId: number, sessionUuid: string, coord: number, offender: string, reason: number) {
+    public async playerReport(report: Omit<PlayerReportRequest, 'type'>) {
         await this.connect();
 
         if (!this.ws || !this.wsr || !this.wsr.checkIfWsLive()) {
@@ -171,11 +178,7 @@ export class LoginClient extends InternalClient {
                 nodeId: this.nodeId,
                 nodeTime: Date.now(),
                 profile: Environment.node.profile,
-                account_id: accountId,
-                session_uuid: sessionUuid,
-                coord,
-                offender,
-                reason
+                ...report
             })
         );
     }

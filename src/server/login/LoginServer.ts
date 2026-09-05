@@ -92,6 +92,47 @@ async function writeModerationNotice(username: string, notice: ModerationNotice,
     }
 }
 
+/**
+ * Who a report is about.
+ *
+ * The world fills these two in only when the offender happened to be on it -
+ * which is the common case, but not a cross-world report and not a report of
+ * somebody who logged off between the offence and the Report Abuse screen. The
+ * login server has the whole account table, so it finishes the job: the account
+ * by username, and then that account's newest session on this profile, which is
+ * the one the logger's `public_chat` and `session_wealth` rows are keyed by.
+ *
+ * A lookup failure is not worth losing the report over, so it falls back to
+ * whatever the world managed to resolve - null included. The row still names
+ * the offender.
+ */
+async function resolveOffender(profile: string, offender: string, accountId: number | null, sessionUuid: string | null): Promise<{ accountId: number | null; sessionUuid: string | null }> {
+    if (accountId !== null && sessionUuid !== null) {
+        return { accountId, sessionUuid };
+    }
+
+    try {
+        let id = accountId;
+
+        if (id === null) {
+            const account = await db.selectFrom('account').select('id').where('username', '=', toSafeName(offender)).executeTakeFirst();
+            id = account?.id ?? null;
+        }
+
+        let session = sessionUuid;
+
+        if (session === null && id !== null) {
+            const newest = await db.selectFrom('session').select('uuid').where('account_id', '=', id).where('profile', '=', profile).orderBy('timestamp', 'desc').limit(1).executeTakeFirst();
+            session = newest?.uuid ?? null;
+        }
+
+        return { accountId: id, sessionUuid: session };
+    } catch (err) {
+        console.error('could not resolve the offender %s for a report', offender, err);
+        return { accountId, sessionUuid };
+    }
+}
+
 export default class LoginServer {
     private server: WebSocketServer;
     private loginRequests: Set<string> = new Set();
@@ -509,7 +550,19 @@ export default class LoginServer {
                         // was dropped while the player was thanked for it. The
                         // login server has the database the staff inbox reads, and
                         // it is the only writer of this table now.
-                        const { account_id, session_uuid, coord, offender, reason } = msg;
+                        const { account_id, session_uuid, coord, offender, reason, uuid, offender_account_id, offender_session_uuid, offender_coord } = msg;
+
+                        // `uuid` is the evidence key the world generated, and
+                        // the only thing joining this row to the input and chat
+                        // the logger server filed under it. It is null when
+                        // nothing was captured: any reason but macroing or bug
+                        // abuse, or an offender who was not online to capture.
+                        const offenderIds = await resolveOffender(
+                            profile,
+                            offender,
+                            typeof offender_account_id === 'number' && offender_account_id > 0 ? offender_account_id : null,
+                            typeof offender_session_uuid === 'string' ? offender_session_uuid : null
+                        );
 
                         await db
                             .insertInto('report')
@@ -522,7 +575,13 @@ export default class LoginServer {
                                 // -1 is the world's "we never got an account_id",
                                 // which is not a row anyone can join to
                                 reporter_account_id: typeof account_id === 'number' && account_id > 0 ? account_id : null,
-                                world: nodeId
+                                world: nodeId,
+                                uuid: typeof uuid === 'string' ? uuid : null,
+                                offender_account_id: offenderIds.accountId,
+                                offender_session_uuid: offenderIds.sessionUuid,
+                                // there is no coord on a `session` row, so this
+                                // one is only ever what the world saw
+                                offender_coord: typeof offender_coord === 'number' ? offender_coord : null
                             })
                             .execute();
                     }

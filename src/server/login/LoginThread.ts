@@ -191,8 +191,21 @@ async function handleRequests(parentPort: ParentPort, msg: any) {
         case 'player_report': {
             if (Environment.login.enabled) {
                 // fire and forget, like the ban and mute above
-                const { account_id, session_uuid, coord, offender, reason } = msg;
-                await client.playerReport(account_id, session_uuid, coord, offender, reason);
+                const { account_id, session_uuid, coord, offender, reason, uuid, offender_account_id, offender_session_uuid, offender_coord } = msg;
+                await client.playerReport({
+                    account_id,
+                    session_uuid,
+                    coord,
+                    offender,
+                    reason,
+                    // null unless the offender was on this world when the
+                    // report was filed; the login server resolves the account
+                    // from the username either way
+                    uuid: uuid ?? null,
+                    offender_account_id: offender_account_id ?? null,
+                    offender_session_uuid: offender_session_uuid ?? null,
+                    offender_coord: offender_coord ?? null
+                });
             }
             break;
         }
