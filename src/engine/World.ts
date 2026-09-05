@@ -51,6 +51,7 @@ import { PlayerLoading } from '#/engine/entity/PlayerLoading.js';
 import { EntityQueueState, PlayerQueueType } from '#/engine/entity/PlayerQueueRequest.js';
 import { PlayerStat } from '#/engine/entity/PlayerStat.js';
 import type { InputChunk } from '#/engine/entity/tracking/InputRing.js';
+import type { InputCapture } from '#/engine/entity/tracking/InputTracking.js';
 import { SessionLog } from '#/engine/entity/tracking/SessionLog.js';
 import { WealthTransactionEvent, WealthEvent } from '#/engine/entity/tracking/WealthEvent.js';
 import GameMap, { changeLocCollision, changeNpcCollision, changeBlockCollision, changePlayerOccCollision } from '#/engine/GameMap.js';
@@ -166,8 +167,14 @@ class World {
      * concurrency cap and the `evidence_end` that closes the chat window all
      * read it. Entries leave when their window ends, so it is bounded by how
      * many people are being watched at once.
+     *
+     * Keyed by username rather than by player, and holding the
+     * {@link InputCapture} itself, because the capture is the thing that has to
+     * survive the offender relogging: the Player object and its ring are gone,
+     * the entry is not, and `resumeInputCapture` hands this very object to the
+     * new ring so the uuid and the chunk numbering continue where they left off.
      */
-    private inputCaptures: Map<string, { uuid: string; reportAt: number; accountId: number | null; endsAt: number; live: boolean }> = new Map();
+    private inputCaptures: Map<string, { capture: InputCapture; endsAt: number; live: boolean }> = new Map();
 
     // the game/zones map
     readonly gameMap: GameMap = new GameMap(Environment.node.members);
@@ -992,6 +999,13 @@ class World {
             this.gameMap.getZone(player.x, player.z, player.level).enter(player);
             player.onLogin();
 
+            // after onLogin, so a capture is only re-armed on somebody who is
+            // actually in the world: everything above this line can still turn
+            // the login away
+            if (this.inputCaptures.size > 0) {
+                this.resumeInputCapture(player);
+            }
+
             if (this.shutdownTick != -1) {
                 player.write(new UpdateRebootTimer(this.shutdownTick - this.currentTick));
             }
@@ -1256,6 +1270,16 @@ class World {
     }
 
     private processShutdown(): void {
+        // First thing, and on the first shutdown tick rather than beside
+        // process.exit: nothing will ever reach `endsAt` now, and the logger
+        // thread needs the ticks between here and the exit to get the messages
+        // out. A capture that never posts its end is a report whose
+        // after-window chat is never copied - the world remembered to stop
+        // watching and forgot to say so.
+        if (this.inputCaptures.size > 0) {
+            this.expireInputCaptures(Date.now(), true);
+        }
+
         for (const player of this.playerLoop.all()) {
             if (isClientConnected(player)) {
                 player.logout();
@@ -2503,12 +2527,14 @@ class World {
                 } else {
                     // the offender relogged, or their tail ran out before the
                     // window did: point the new ring at the report that is
-                    // already open rather than starting a second one
-                    player.input.track(endsAt, { uuid: running.uuid, reportAt: running.reportAt, accountId: running.accountId });
+                    // already open rather than starting a second one. The same
+                    // capture object goes back in, so the chunk numbering picks
+                    // up where the last ring left it.
+                    player.input.track(endsAt, running.capture);
                 }
             }
 
-            return { uuid: running.uuid, started: false, extended, endsAt };
+            return { uuid: running.capture.uuid, started: false, extended, endsAt };
         }
 
         let live = 0;
@@ -2518,16 +2544,20 @@ class World {
             }
         }
 
-        const capture = {
+        const capture: InputCapture = {
             uuid: randomUUID(),
             reportAt: now,
-            accountId: player.account_id > 0 ? player.account_id : null
+            accountId: player.account_id > 0 ? player.account_id : null,
+            nextSeq: 0
         };
 
         const tail = live < World.MAX_LIVE_CAPTURES;
         const endsAt = now + trackMs;
 
-        this.inputCaptures.set(offender, { ...capture, endsAt, live: tail });
+        // the capture object itself, not a copy of its fields: the ring and the
+        // map share it, so `nextSeq` is one counter for the whole report even
+        // when three rings in a row write into it
+        this.inputCaptures.set(offender, { capture, endsAt, live: tail });
 
         // unconditionally, and before any chunk: the before-window chat is
         // worth keeping even for an offender whose ring is empty - somebody who
@@ -2572,10 +2602,15 @@ class World {
      * tells the logger server to copy the after-window chat, so it is posted
      * for a ring-only capture too: there is no input tail to end, but there is
      * still a quarter of an hour of the offender's chat worth keeping.
+     *
+     * `all` closes every open capture regardless of the clock, which is what a
+     * world on its way down does: the process is about to exit, nothing will
+     * ever reach `endsAt`, and a capture that never posts its end is a report
+     * whose after-window chat is never copied at all.
      */
-    private expireInputCaptures(now: number) {
+    private expireInputCaptures(now: number, all: boolean = false) {
         for (const [offender, state] of this.inputCaptures) {
-            if (now < state.endsAt) {
+            if (!all && now < state.endsAt) {
                 continue;
             }
 
@@ -2583,14 +2618,39 @@ class World {
 
             this.loggerThread?.postMessage({
                 type: 'evidence_end',
-                report_uuid: state.uuid,
+                report_uuid: state.capture.uuid,
                 // the after-window starts where the before-window stopped, and
                 // the logger has nothing else to work it out from
-                report_at: state.reportAt,
-                offender_account_id: state.accountId,
+                report_at: state.capture.reportAt,
+                offender_account_id: state.capture.accountId,
                 ended_at: now
             });
         }
+    }
+
+    /**
+     * An offender who was being watched when they logged out, logging back in.
+     *
+     * They arrive as a new Player with an empty ring, and without this the
+     * capture would go on counting down over somebody the world is no longer
+     * recording - the second half of a fifteen-minute window silently empty.
+     * The tail is re-armed on the new ring under the same uuid, and
+     * `InputRing.track` writes marker 4 as it always does, so the decoder sees
+     * a second "the live tail begins here" and knows the gap between the last
+     * chunk and this one is a logout rather than a player who stopped moving.
+     *
+     * Only a capture that had a tail to begin with: a report past
+     * {@link World.MAX_LIVE_CAPTURES} was given the ring and no tail, and a
+     * relog is not the moment to hand it one.
+     */
+    private resumeInputCapture(player: Player): void {
+        const state = this.inputCaptures.get(player.username);
+
+        if (!state || !state.live || Date.now() >= state.endsAt) {
+            return;
+        }
+
+        player.input.track(state.endsAt, state.capture);
     }
 
     /**
@@ -2616,7 +2676,11 @@ class World {
             report_at: capture.reportAt,
             offender_account_id: capture.accountId,
             capture: kind,
-            seq: chunk.seq,
+            // the capture's counter, not the ring's: `chunk.seq` restarts at 0
+            // with every new Player object, and a relog inside the window would
+            // otherwise file its first chunk under a number the ring before it
+            // already used
+            seq: capture.nextSeq++,
             started_at: chunk.startedAt,
             flushed_at: chunk.flushedAt,
             client: player.clientKind,

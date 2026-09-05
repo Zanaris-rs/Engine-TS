@@ -23,15 +23,26 @@ import EventMouseMove from '#/network/game/client/model/EventMouseMove.js';
  * and route finished chunks.
  */
 /**
- * What a capture is filed under. All three travel with every chunk, because
- * the logger server writes the rows and copies the chat window without ever
- * asking the login server anything - the two hub processes need no ordering
- * between them, which is the whole point of the world generating the uuid.
+ * What a capture is filed under. The first three travel with every chunk,
+ * because the logger server writes the rows and copies the chat window without
+ * ever asking the login server anything - the two hub processes need no
+ * ordering between them, which is the whole point of the world generating the
+ * uuid.
+ *
+ * `nextSeq` is the fourth because a capture outlives the player object it
+ * started on. An offender who logs out and back in inside their own window
+ * gets a brand new {@link InputRing} whose own `seq` counts from 0 again, and
+ * two chunks filed as `seq 0` under one uuid are one chunk as far as the
+ * logger's dedupe and the website's decoder are concerned. So the number that
+ * orders a report's chunks is counted per *capture*, on this object - which
+ * `World` holds in `inputCaptures` and hands back to the new ring on the way
+ * in - and never by the ring.
  */
 export type InputCapture = {
     uuid: string;
     reportAt: number;
     accountId: number | null;
+    nextSeq: number;
 };
 
 export default class InputTracking {
@@ -113,6 +124,14 @@ export default class InputTracking {
      * Logging out. Anything captured under a live tail is worth keeping;
      * anything the ring is holding is not - the player was not reported, and
      * their idle mouse is nobody's business.
+     *
+     * The last partial chunk of a running tail is sealed and submitted, and
+     * that is the only thing this posts. No `evidence_end`: the capture is
+     * `World.inputCaptures`' business and it outlives this object deliberately,
+     * so an offender who logs out to shake off a moderator comes back into the
+     * window they left - see `World.resumeInputCapture`. The window closes when
+     * its clock says so, or when the world goes down, and never because
+     * somebody pulled their plug.
      */
     cleanup(): void {
         this.ring.untrack(Date.now());

@@ -28,10 +28,19 @@ const RETRY_INTERVAL = 15_000;
 
 const pending: Map<string, { message: EvidenceMessage; firstTried: number }> = new Map();
 
-/** One key per thing that can be written once: a chunk, or the end of a window. */
+/**
+ * One key per thing that can be written once: a chunk, or the end of a window.
+ *
+ * `started_at` is in the chunk key beside `seq` for the same reason the logger
+ * server's own duplicate probe carries it: `seq` is the world's promise that
+ * two chunks of one report are different, and a promise that has to hold across
+ * a relog is worth checking against something the chunk itself knows. Two
+ * chunks that agree on the report, the number *and* the instant their first
+ * record was appended are one chunk that got sent twice.
+ */
 function evidenceKey(message: EvidenceMessage): string {
     if (message.type === 'report_evidence') {
-        return `${message.report_uuid}:${message.seq}`;
+        return `${message.report_uuid}:${message.seq}:${message.started_at}`;
     }
 
     return `${message.report_uuid}:${message.type === 'evidence_begin' ? 'begin' : 'end'}`;

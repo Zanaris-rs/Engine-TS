@@ -240,9 +240,23 @@ export default class LoggerServer {
      * world's retry queue can do, has to be caught here instead - which is only
      * sound because the report's queue means no other message for it is running
      * between the check and the insert.
+     *
+     * The probe is `(report_uuid, seq, started_at)` and not the pair, because
+     * the pair makes a claim this process cannot check: that the world never
+     * hands two different chunks the same number under one uuid. It very nearly
+     * did - a `seq` counted by the player's ring restarted at 0 when the
+     * offender relogged inside their own capture window, and every chunk after
+     * the relog would have been thrown away here as a duplicate of one from
+     * before it. The world counts per capture now, and this is the assertion
+     * rather than the assumption: a real duplicate is the same chunk, so it
+     * agrees about when its first record was appended too.
+     *
+     * The bound goes in as a `Date`, like every other comparison here: the
+     * sqlite driver formats one with the same `toSqlDateTime` that wrote the
+     * column, and pg and mysql2 bind one natively. Nothing here writes `now()`.
      */
     private async writeEvidence(msg: ReportEvidenceMessage): Promise<void> {
-        const duplicate = await db.selectFrom('report_input').select('id').where('report_uuid', '=', msg.report_uuid).where('seq', '=', msg.seq).limit(1).executeTakeFirst();
+        const duplicate = await db.selectFrom('report_input').select('id').where('report_uuid', '=', msg.report_uuid).where('seq', '=', msg.seq).where('started_at', '=', new Date(msg.started_at)).limit(1).executeTakeFirst();
 
         if (duplicate) {
             return;

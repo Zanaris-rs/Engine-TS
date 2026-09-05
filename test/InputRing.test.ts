@@ -4,6 +4,7 @@ import test from 'node:test';
 
 import InputRing, { CHUNK_AGE_LIMIT, CHUNK_SIZE_LIMIT, FLOOD_BUDGET_BYTES, FLOOD_WINDOW_TICKS, InputMarker, InputRecord, MOVE_PAYLOAD_LIMIT, RING_CAPACITY } from '#/engine/entity/tracking/InputRing.js';
 import type { InputChunk } from '#/engine/entity/tracking/InputRing.js';
+import type { InputCapture } from '#/engine/entity/tracking/InputTracking.js';
 
 /**
  * The input ring's framing is a cross-repo contract: the engine writes it into
@@ -655,6 +656,98 @@ test('untrack submits what the tail had, and clear throws everything away', () =
     ring.clear();
     assert.equal(ring.size, 0);
     assert.equal(ring.pending, 0);
+});
+
+// ---------------------------------------------------------------------------
+// surviving a relog
+// ---------------------------------------------------------------------------
+
+/**
+ * A player object dies at logout and its ring dies with it. The capture in
+ * `World.inputCaptures` does not - an offender who pulls their plug halfway
+ * through a fifteen-minute window comes back into the window they left - so one
+ * report's chunks are written by two rings, or three.
+ *
+ * The one line borrowed from `World.submitInputTracking` is the `nextSeq++`
+ * below, and it is borrowed because the bug it fixes is invisible in either
+ * file on its own: the ring is right to count from 0 (it is a new ring) and the
+ * logger server was right to treat one uuid's `seq 0` as a thing written once,
+ * and the two together silently threw away every chunk captured after a relog.
+ * What this file can hold the ring to is the other half: `chunk.seq` really
+ * does restart, and `track()` really does open the second tail with marker 4,
+ * so the decoder sees the resumption rather than a player who went quiet.
+ */
+type Filed = { seq: number; chunk: InputChunk };
+
+function file(capture: InputCapture, chunk: InputChunk, filed: Filed[]): void {
+    filed.push({ seq: capture.nextSeq++, chunk });
+}
+
+test('a capture that outlives its ring goes on numbering where it left off', () => {
+    const capture: InputCapture = { uuid: '6f7a1f0e', reportAt: START, accountId: 7, nextSeq: 0 };
+    const filed: Filed[] = [];
+
+    // the report lands: the ring is sealed and drained, then the tail runs
+    const before = new InputRing(chunk => file(capture, chunk, filed));
+
+    before.appletFocus(0, START, 1);
+    before.track(START + 900_000, 1, START + 600);
+
+    for (const chunk of before.drainRing()) {
+        file(capture, chunk, filed);
+    }
+
+    before.mouseClick(2, START + 1200, clickWord(1, 0, 5, 5));
+    before.onCycle(START + 600 + CHUNK_AGE_LIMIT);
+
+    // the offender logs out mid-window: what the tail had is submitted and the
+    // ring is thrown away, which is all `InputTracking.cleanup` does. Nothing
+    // closes the capture - that is `World`'s, and it keeps it.
+    before.appletFocus(120, START + 72_000, 0);
+    before.untrack(START + 72_600);
+    before.clear();
+
+    // ...and back in, five minutes later, on a ring that has never seen any of
+    // this. `World.resumeInputCapture` hands it the same capture object.
+    const after = new InputRing(chunk => file(capture, chunk, filed));
+
+    after.track(START + 900_000, 500, START + 300_000);
+    assert.deepEqual(after.drainRing(), [], 'a ring that just logged in is holding nothing');
+
+    after.mouseClick(501, START + 300_600, clickWord(1, 0, 9, 9));
+    after.onCycle(START + 300_000 + CHUNK_AGE_LIMIT);
+
+    assert.equal(filed.length, 4);
+
+    // the numbering the logger and the website see: one run, no repeats
+    assert.deepEqual(
+        filed.map(row => row.seq),
+        [0, 1, 2, 3]
+    );
+    assert.equal(capture.nextSeq, 4);
+
+    // and the numbering the ring alone would have produced: the first chunk
+    // after the relog collides with the first chunk of the report
+    assert.deepEqual(
+        filed.map(row => row.chunk.seq),
+        [0, 1, 2, 0]
+    );
+
+    // `(report_uuid, seq, started_at)` is the logger server's duplicate probe,
+    // so the pairs have to be distinct even before the seqs are trusted
+    const keys = filed.map(row => `${row.seq}:${row.chunk.startedAt}`);
+    assert.equal(new Set(keys).size, filed.length, 'every chunk has its own key');
+
+    // seq 0 is the before-window: the chunk that was in flight when the report
+    // landed, sealed by `track()` and drained out of the ring
+    assert.deepEqual([...filed[0].chunk.bytes.slice(0, 5)], [InputRecord.TIME_ANCHOR, 0, 0, InputRecord.APPLET_FOCUS, 1]);
+
+    // and the resumed tail says where it begins in the stream, exactly as the
+    // first one did - which is the whole of what tells the decoder that the gap
+    // between seq 2 and seq 3 is a logout and not a player who stopped moving
+    for (const row of [filed[1], filed[3]]) {
+        assert.deepEqual([...row.chunk.bytes.slice(0, 5)], [InputRecord.TIME_ANCHOR, 0, 0, InputRecord.MARKER, InputMarker.LIVE_TAIL_BEGINS]);
+    }
 });
 
 // ---------------------------------------------------------------------------
