@@ -4,8 +4,13 @@ import { toSafeName } from '#/util/JString.js';
  * Names that would let an account pass itself off as staff. The website rejects
  * these at signup; the staff CLI can override them, because an account actually
  * called mod_something is not impersonating anyone if staff created it.
+ *
+ * 'automated' is in here for a second reason: the engine passes it as the
+ * actor of a ban or a mute no person ordered, and `noticeActor()` turns it
+ * into "an automated check". An account by that name would be looked up as the
+ * author of those notices, and would be signing them.
  */
-export const RESERVED_USERNAMES = ['jagex', 'admin', 'moderator', 'owner', 'system', 'staff', 'jmod', 'pmod'];
+export const RESERVED_USERNAMES = ['jagex', 'admin', 'moderator', 'owner', 'system', 'staff', 'jmod', 'pmod', 'automated'];
 
 export type UsernameCheck = { ok: true; username: string } | { ok: false; reason: string; reserved: boolean };
 

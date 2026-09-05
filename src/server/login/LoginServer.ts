@@ -61,7 +61,11 @@ async function writeModerationNotice(username: string, notice: ModerationNotice,
             return;
         }
 
-        const staff = await db.selectFrom('account').select('id').where('username', '=', staffUsername).executeTakeFirst();
+        // 'automated' is the report-abuse and spam paths' actor, not a person:
+        // it is a reserved username, so there is no row to find and the notice
+        // is written with no author - which is what "an automated check" in the
+        // body already tells the player.
+        const staff = staffUsername === 'automated' ? undefined : await db.selectFrom('account').select('id').where('username', '=', staffUsername).executeTakeFirst();
 
         const recent = await recentNoticeQuery(db, account.id, notice.kind, new Date(Date.now() - NOTICE_DUPLICATE_WINDOW_MS)).executeTakeFirst();
 

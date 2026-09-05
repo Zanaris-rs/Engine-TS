@@ -25,7 +25,9 @@ test('checkUsername rejects names base37 cannot carry', () => {
 });
 
 test('checkUsername flags staff impersonation separately, so the CLI can override it', () => {
-    for (const name of ['mod_matt', 'jagex', 'admin', 'jmod']) {
+    // 'automated' is the actor the engine passes for a ban nobody ordered:
+    // an account by that name would end up signing those notices
+    for (const name of ['mod_matt', 'jagex', 'admin', 'jmod', 'automated']) {
         const result = checkUsername(name);
         assert.equal(result.ok, false, name);
         assert.equal(result.ok === false && result.reserved, true, name);
