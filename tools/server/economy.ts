@@ -24,7 +24,8 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 
 import Environment from '#/util/Environment.js';
-import { fallbackInvLookup, InvLookup, invLookupFromCache, readSave } from '#tools/server/SaveReader.js';
+import { censusSaves } from '#tools/server/SaveCensus.js';
+import { fallbackInvLookup, InvLookup, invLookupFromCache } from '#tools/server/SaveReader.js';
 
 const USAGE = `Usage:
   economy.ts [--dry-run] [--profile <name>] [--players <dir>] [--skip-unreadable]
@@ -131,70 +132,6 @@ function loadInvs(): InvLookup {
     return fallbackInvLookup();
 }
 
-/**
- * The login server writes a save with `writeFile` - not a write-and-rename - so
- * a file touched this instant may be half of the old save and half of the new
- * one. The crc catches most of that, but not a torn write that happens to
- * checksum, so anything younger than this is left for the next census.
- */
-const SETTLE_MS = 1000;
-
-interface Census {
-    /** save files found: every one of them is a player, censused or not */
-    players: number;
-    /** save files actually summed into `items` */
-    censused: number;
-    /** `<file>: <why>`, for the operator's eyes only - these name accounts */
-    unreadable: string[];
-    /** files skipped because they were still being written */
-    unsettled: number;
-    newestSave: Date | null;
-    items: Map<number, number>;
-}
-
-function census(dir: string, invs: InvLookup): Census {
-    const result: Census = { players: 0, censused: 0, unreadable: [], unsettled: 0, newestSave: null, items: new Map() };
-
-    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
-        if (!entry.isFile() || !entry.name.endsWith('.sav')) {
-            continue;
-        }
-
-        const file = path.join(dir, entry.name);
-        const username = entry.name.slice(0, -4);
-
-        result.players++;
-
-        const stat = fs.statSync(file);
-        if (!result.newestSave || stat.mtime > result.newestSave) {
-            result.newestSave = stat.mtime;
-        }
-
-        if (Date.now() - stat.mtimeMs < SETTLE_MS) {
-            result.unsettled++;
-            continue;
-        }
-
-        let save;
-        try {
-            save = readSave(username, new Uint8Array(fs.readFileSync(file)), invs);
-        } catch (err) {
-            result.unreadable.push(`${entry.name}: ${(err as Error).message}`);
-            continue;
-        }
-
-        result.censused++;
-
-        for (const objs of Object.values(save.inventories)) {
-            for (const obj of objs) {
-                result.items.set(obj.id, (result.items.get(obj.id) ?? 0) + obj.count);
-            }
-        }
-    }
-
-    return result;
-}
-
 /** {id: count}, by ascending id, so two snapshots can be diffed by eye. */
 function toCounts(items: Map<number, number>, ids?: number[]): Record<string, number> {
     const counts: Record<string, number> = {};
@@ -258,7 +195,9 @@ const started = Date.now();
 const tracked = loadTracked();
 console.log(`[economy] tracking ${tracked.items.length} items from ${tracked.source}`);
 
-const counted = census(playersDir, loadInvs());
+const counted = await censusSaves(playersDir, loadInvs(), {
+    onWait: (pending, attempt, waitMs) => console.log(`[economy] ${pending} save(s) were being written; waiting ${waitMs} ms and reading them again (attempt ${attempt})`)
+});
 
 if (counted.players === 0) {
     // "the game contains nothing" is almost always "this ran in the wrong
@@ -282,8 +221,16 @@ if (counted.unreadable.length > 0) {
     }
 }
 
-if (counted.unsettled > 0) {
-    console.log(`[economy] skipped ${counted.unsettled} save(s) written in the last second: the login server writes them in place, so they may be half of each. The next census counts them.`);
+if (counted.settled > 0) {
+    console.log(`[economy] ${counted.settled} save(s) settled on a second look and were censused`);
+}
+
+if (counted.unsettled.length > 0) {
+    // a filename is a username, so this goes where the unreadable ones go: the
+    // operator's journal, and nowhere else
+    for (const name of counted.unsettled) {
+        console.error(`[economy] still being written after every attempt, left out: ${name}`);
+    }
 }
 
 if (counted.censused === 0) {

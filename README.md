@@ -360,12 +360,18 @@ logs which one it read.
 
 A save that cannot be read **stops the run** rather than being skipped, because
 every item in it would otherwise read as having left the game. Fix or remove the
-file, or pass `--skip-unreadable` once you have looked at it. A save **written
-in the last second** is skipped too and counted next hour: the login server
-writes saves in place rather than by rename, so a file touched this instant may
-be half of each.
+file, or pass `--skip-unreadable` once you have looked at it.
 
-Either way the run says `63 players (62 censused)` and **writes no
+A save **written in the last second** is not read yet and not skipped either:
+the login server writes saves in place rather than by rename, so a file touched
+this instant may be half of each. The census sets it aside, waits a second and a
+half, and reads it again - twice, if it has to - which is the difference between
+a snapshot that waited and a snapshot that is knowingly short. A file that
+changed *while* it was being read gets the same treatment, since the mtime
+window alone cannot see that. Only a save still being written after every
+attempt is left out, and then it counts as a save that could not be read.
+
+In either of those cases the run says `63 players (62 censused)` and **writes no
 `economy_flow` rows at all** - the totals in the snapshot are still worth
 having, but a census that missed a save cannot tell a bank that emptied from a
 save it did not read. A directory with no saves in it, or none readable, writes
