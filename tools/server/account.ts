@@ -17,8 +17,9 @@
  */
 import * as bcrypt from 'bcrypt-ts';
 
+import { fromDbDate } from '#/db/DateFormat.js';
 import { db, toDbDate } from '#/db/query.js';
-import { MESSAGE_KINDS } from '#/server/login/MessageCentre.js';
+import { NOTICE_KIND } from '#/server/login/MessageCentre.js';
 import { checkPassword, checkUsername, ipGroup, isValidEmail, normalizeEmail } from '#/util/Account.js';
 import Environment from '#/util/Environment.js';
 import { toDisplayName, toSafeName } from '#/util/JString.js';
@@ -231,12 +232,20 @@ async function sendNotice(args: string[]) {
         .insertInto('account_message')
         .values({
             account_id: account.id,
-            kind: MESSAGE_KINDS[1], // 'notice'
+            kind: NOTICE_KIND,
             subject,
             body,
             created_by_account_id: author?.id ?? null
         })
         .execute();
+
+    // Same row accounts.staff_notice writes, so /staff/reports and any later
+    // audit sees a notice sent from the shell exactly as it sees one sent from
+    // the site. Only when a person is named: an unattributed notice is the
+    // system talking, and there is no actor to record.
+    if (author) {
+        await db.insertInto('staff_action').values({ actor_account_id: author.id, action: 'staff_notice', target: account.username }).execute();
+    }
 
     const unread = await db
         .selectFrom('account_message')
@@ -274,12 +283,38 @@ async function tickets(args: string[]) {
         return;
     }
 
+    const ids = rows.map(row => row.id);
+
+    // One query for every ticket's newest message rather than one per row.
+    // max(id) rather than max(created_at): sqlite stores seconds, so two
+    // messages in the same second are a tie there and the id is the only
+    // thing that actually orders them.
+    const newest = await db
+        .selectFrom('ticket_message')
+        .innerJoin(
+            eb =>
+                eb
+                    .selectFrom('ticket_message')
+                    .select(({ fn }) => ['ticket_id', fn.max('id').as('id')])
+                    .where('ticket_id', 'in', ids)
+                    .groupBy('ticket_id')
+                    .as('latest'),
+            join => join.onRef('latest.id', '=', 'ticket_message.id')
+        )
+        .select(['ticket_message.ticket_id', 'ticket_message.from_staff'])
+        .execute();
+
+    // sqlite hands booleans back as 0/1, which is why this tests truthiness
+    const awaitingStaff = new Map(newest.map(row => [row.ticket_id, !row.from_staff]));
+
     console.log(`${rows.length} ${filter === 'all' ? '' : filter + ' '}ticket(s), newest first:`);
     for (const row of rows) {
-        const last = await db.selectFrom('ticket_message').select('from_staff').where('ticket_id', '=', row.id).orderBy('created_at', 'desc').orderBy('id', 'desc').executeTakeFirst();
-        const waiting = last && !last.from_staff ? 'awaiting staff' : '';
+        const waiting = awaitingStaff.get(row.id) ? 'awaiting staff' : '';
+        // postgres hands back a Date and sqlite a string; fromDbDate reads
+        // either, and String(aDate) would have printed a local-time sentence
+        const updated = fromDbDate(row.updated_at).toISOString().slice(0, 19).replace('T', ' ');
 
-        console.log(`  ${String(row.id).padStart(6)}  ${row.status.padEnd(6)}  ${row.kind.padEnd(6)}  ${row.username.padEnd(12)}  ${String(row.updated_at).slice(0, 19)}  ${row.subject}  ${waiting}`);
+        console.log(`  ${String(row.id).padStart(6)}  ${row.status.padEnd(6)}  ${row.kind.padEnd(6)}  ${row.username.padEnd(12)}  ${updated}  ${row.subject}  ${waiting}`);
     }
 
     console.log('Replies go through the website staff inbox, which audits them; this command only reads.');
