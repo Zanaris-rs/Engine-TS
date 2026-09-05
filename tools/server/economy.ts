@@ -131,15 +131,29 @@ function loadInvs(): InvLookup {
     return fallbackInvLookup();
 }
 
+/**
+ * The login server writes a save with `writeFile` - not a write-and-rename - so
+ * a file touched this instant may be half of the old save and half of the new
+ * one. The crc catches most of that, but not a torn write that happens to
+ * checksum, so anything younger than this is left for the next census.
+ */
+const SETTLE_MS = 1000;
+
 interface Census {
+    /** save files found: every one of them is a player, censused or not */
     players: number;
+    /** save files actually summed into `items` */
+    censused: number;
+    /** `<file>: <why>`, for the operator's eyes only - these name accounts */
     unreadable: string[];
+    /** files skipped because they were still being written */
+    unsettled: number;
     newestSave: Date | null;
     items: Map<number, number>;
 }
 
 function census(dir: string, invs: InvLookup): Census {
-    const result: Census = { players: 0, unreadable: [], newestSave: null, items: new Map() };
+    const result: Census = { players: 0, censused: 0, unreadable: [], unsettled: 0, newestSave: null, items: new Map() };
 
     for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
         if (!entry.isFile() || !entry.name.endsWith('.sav')) {
@@ -156,6 +170,11 @@ function census(dir: string, invs: InvLookup): Census {
             result.newestSave = stat.mtime;
         }
 
+        if (Date.now() - stat.mtimeMs < SETTLE_MS) {
+            result.unsettled++;
+            continue;
+        }
+
         let save;
         try {
             save = readSave(username, new Uint8Array(fs.readFileSync(file)), invs);
@@ -163,6 +182,8 @@ function census(dir: string, invs: InvLookup): Census {
             result.unreadable.push(`${entry.name}: ${(err as Error).message}`);
             continue;
         }
+
+        result.censused++;
 
         for (const objs of Object.values(save.inventories)) {
             for (const obj of objs) {
@@ -248,6 +269,8 @@ if (counted.players === 0) {
 }
 
 if (counted.unreadable.length > 0) {
+    // stderr, and nowhere else: a filename is a username, and the census is the
+    // one part of this that never learns who owns what
     for (const line of counted.unreadable) {
         console.error(`[economy] unreadable save ${line}`);
     }
@@ -259,6 +282,21 @@ if (counted.unreadable.length > 0) {
     }
 }
 
+if (counted.unsettled > 0) {
+    console.log(`[economy] skipped ${counted.unsettled} save(s) written in the last second: the login server writes them in place, so they may be half of each. The next census counts them.`);
+}
+
+if (counted.censused === 0) {
+    console.log(`[economy] nothing readable in ${path.resolve(playersDir)}; nothing written`);
+    process.exit(0);
+}
+
+// a census that missed a save is missing whatever was in it, so the *change*
+// since the last one cannot be told apart from a bank that emptied. The
+// snapshot is still worth having - it is a floor, and the page reads it as
+// totals - but no flow row may come out of it.
+const complete = counted.censused === counted.players;
+
 const items = toCounts(counted.items);
 const trackedCounts = toCounts(
     counted.items,
@@ -268,10 +306,9 @@ const coins = counted.items.get(995) ?? 0;
 const elapsed = Date.now() - started;
 const rss = Math.round(process.memoryUsage().rss / 1024 / 1024);
 
-const summary =
-    `${profile}: ${counted.players.toLocaleString('en-US')} players, ${coins.toLocaleString('en-US')} coins, ` +
-    `${Object.keys(items).length.toLocaleString('en-US')} item ids, newest save ${counted.newestSave?.toISOString() ?? 'never'}` +
-    ` (${elapsed} ms, ${rss} MiB rss)`;
+const players = complete ? `${counted.players.toLocaleString('en-US')} players` : `${counted.players.toLocaleString('en-US')} players (${counted.censused.toLocaleString('en-US')} censused)`;
+
+const summary = `${profile}: ${players}, ${coins.toLocaleString('en-US')} coins, ` + `${Object.keys(items).length.toLocaleString('en-US')} item ids, newest save ${counted.newestSave?.toISOString() ?? 'never'}` + ` (${elapsed} ms, ${rss} MiB rss)`;
 
 if (dryRun) {
     console.log(`[economy] ${summary}; dry run, nothing written`);
@@ -281,24 +318,32 @@ if (dryRun) {
     // importing the module connects
     const { db, toDbDate } = await import('#/db/query.js');
 
-    const previous = await db.selectFrom('economy_snapshot').select(['id', 'tracked']).where('profile', '=', profile).orderBy('taken_at', 'desc').orderBy('id', 'desc').limit(1).executeTakeFirst();
-
     const takenAt = new Date();
-    await db
-        .insertInto('economy_snapshot')
-        .values({
-            taken_at: toDbDate(takenAt),
-            profile,
-            players: counted.players,
-            coins,
-            items: toJsonColumn(items),
-            tracked: toJsonColumn(trackedCounts)
-        })
-        .executeTakeFirst();
 
-    const flows: { taken_at: string; profile: string; item_id: number; delta: number }[] = [];
-    if (previous) {
+    // one transaction, so a snapshot and the flow rows derived from it are
+    // never half-written: a reader that saw the snapshot without its flows
+    // would draw the totals moving with nothing entering or leaving
+    const written = await db.transaction().execute(async trx => {
+        const previous = complete ? await trx.selectFrom('economy_snapshot').select(['id', 'tracked']).where('profile', '=', profile).orderBy('taken_at', 'desc').orderBy('id', 'desc').limit(1).executeTakeFirst() : undefined;
+
+        await trx
+            .insertInto('economy_snapshot')
+            .values({
+                taken_at: toDbDate(takenAt),
+                profile,
+                players: counted.players,
+                coins,
+                items: toJsonColumn(items),
+                tracked: toJsonColumn(trackedCounts)
+            })
+            .execute();
+
+        if (!previous) {
+            return { rows: [], hadPrevious: false };
+        }
+
         const before = fromJsonColumn(previous.tracked);
+        const rows: { taken_at: string; profile: string; item_id: number; delta: number }[] = [];
 
         for (const item of tracked.items) {
             // an item the previous census was not tracking has no baseline, and
@@ -309,19 +354,30 @@ if (dryRun) {
 
             const delta = trackedCounts[item.id] - before[item.id];
             if (delta !== 0) {
-                flows.push({ taken_at: toDbDate(takenAt), profile, item_id: item.id, delta });
+                rows.push({ taken_at: toDbDate(takenAt), profile, item_id: item.id, delta });
             }
         }
 
-        if (flows.length > 0) {
-            await db.insertInto('economy_flow').values(flows).execute();
+        if (rows.length > 0) {
+            await trx.insertInto('economy_flow').values(rows).execute();
         }
-    }
+
+        return { rows, hadPrevious: true };
+    });
 
     await db.destroy();
 
-    const flowed = flows.map(flow => `${tracked.items.find(item => item.id === flow.item_id)?.name ?? flow.item_id} ${flow.delta > 0 ? '+' : ''}${flow.delta}`);
-    const wrote = previous ? `${flows.length} flow rows${flowed.length > 0 ? ` (${flowed.join(', ')})` : ''}` : 'no flow rows (first census for this profile: nothing to compare it to)';
+    let wrote;
+    if (written.rows.length > 0) {
+        const flowed = written.rows.map(flow => `${tracked.items.find(item => item.id === flow.item_id)?.name ?? flow.item_id} ${flow.delta > 0 ? '+' : ''}${flow.delta}`);
+        wrote = `${written.rows.length} flow rows (${flowed.join(', ')})`;
+    } else if (!complete) {
+        wrote = `no flow rows (${counted.players - counted.censused} of ${counted.players} saves were not censused, so nothing can be said about what changed)`;
+    } else if (!written.hadPrevious) {
+        wrote = 'no flow rows (first census for this profile: nothing to compare it to)';
+    } else {
+        wrote = 'no flow rows (nothing tracked moved)';
+    }
 
     console.log(`[economy] ${summary}; wrote a snapshot and ${wrote}`);
 }

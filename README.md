@@ -330,8 +330,9 @@ game.
 **What counts is what is in a save file.** Backpack, worn and bank, of every
 account that has ever logged out. So:
 
-- **Shop stock does not count.** Shop invs are temp scope, rebuilt from the
-  config at startup, and belong to nobody.
+- **Shop stock does not count.** Shop invs are *shared* scope - one inventory
+  behind every instance of that shop, restocked by the world from the config -
+  and belong to nobody.
 - **Ground items do not count.** Neither do items in a trade window, a duel
   stake or any other temp inv: they are mid-flight, and the save is where things
   come to rest.
@@ -345,7 +346,9 @@ account that has ever logged out. So:
 since the previous snapshot, positive entered the game and negative left it. The
 first census for a profile writes none - there is nothing to compare it to - and
 neither does an item only just added to the tracked list, until the run after
-the one that first counts it.
+the one that first counts it. The snapshot and the flow rows derived from it go
+in **one transaction**: a reader that saw the snapshot without its flows would
+see the totals move with nothing entering or leaving.
 
 That list is `data/config/economy.json`, committed with the engine and edited by
 hand: the partyhats, h'ween masks, santa hat, cracker, disk of returning, half
@@ -357,11 +360,23 @@ logs which one it read.
 
 A save that cannot be read **stops the run** rather than being skipped, because
 every item in it would otherwise read as having left the game. Fix or remove the
-file, or pass `--skip-unreadable` once you have looked at it. A directory with
-no saves in it writes nothing at all and exits cleanly: "the game contains
-nothing" is nearly always "this ran in the wrong directory", and recording it
-would make the next census report the entire game as having entered it that
-hour.
+file, or pass `--skip-unreadable` once you have looked at it. A save **written
+in the last second** is skipped too and counted next hour: the login server
+writes saves in place rather than by rename, so a file touched this instant may
+be half of each.
+
+Either way the run says `63 players (62 censused)` and **writes no
+`economy_flow` rows at all** - the totals in the snapshot are still worth
+having, but a census that missed a save cannot tell a bank that emptied from a
+save it did not read. A directory with no saves in it, or none readable, writes
+nothing whatsoever and exits cleanly: "the game contains nothing" is nearly
+always "this ran in the wrong directory", and recording it would make the next
+census report the entire game as having entered it that hour.
+
+The **filename of an unreadable save is a username**, so it goes to the
+operator's stderr - the systemd journal on the hub - and nowhere else. Nothing
+about who owns what reaches the database or the site; that is the whole point of
+the census.
 
 ## Dependencies
 
