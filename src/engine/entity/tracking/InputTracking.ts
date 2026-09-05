@@ -80,6 +80,22 @@ export default class InputTracking {
         }
     }
 
+    /**
+     * Submit what the ring holds and nothing more: the world is already running
+     * as many live tails as it will, so this report gets the minutes before it
+     * and no tail of its own.
+     */
+    dumpRing(capture: InputCapture): void {
+        const now = Date.now();
+
+        this.capture = capture;
+        this.ring.flush(now);
+
+        for (const chunk of this.ring.drainRing()) {
+            World.submitInputTracking(this.player, chunk, 'ring');
+        }
+    }
+
     /** Stop early. What the tail had collected is still submitted. */
     untrack(): void {
         this.ring.untrack(Date.now());

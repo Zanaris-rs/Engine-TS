@@ -567,6 +567,25 @@ test('the tail expires on its own, and the last of it is still submitted', () =>
     assert.equal(ring.size, 1);
 });
 
+test('flush seals the chunk in flight without opening a tail', () => {
+    const ring = new InputRing(() => assert.fail('nothing is live'));
+
+    ring.appletFocus(0, START, 1);
+    ring.flush(START + 1200);
+
+    // the ring-only dump a world already running five tails gives a report:
+    // everything up to the report instant, and no marker 4 to promise more
+    const chunks = ring.drainRing();
+    assert.equal(chunks.length, 1);
+    assert.equal(chunks[0].flushedAt, START + 1200);
+    assert.equal(ring.activeUntil, 0);
+    assert.deepEqual([...chunks[0].bytes], [InputRecord.TIME_ANCHOR, 0, 0, InputRecord.APPLET_FOCUS, 1]);
+
+    // and flushing an empty chunk files nothing
+    ring.flush(START + 1800);
+    assert.equal(ring.size, 0);
+});
+
 test('untrack submits what the tail had, and clear throws everything away', () => {
     const live: InputChunk[] = [];
     const ring = new InputRing(chunk => live.push(chunk));

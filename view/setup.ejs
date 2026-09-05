@@ -575,6 +575,9 @@
             config.friend.port = 45099;
 
             config.logger.enabled = true;
+            // the check-in firehose stays off: nothing reads it and it is the
+            // bulk of what the session log costs
+            config.logger.sessionLog = false;
             config.logger.host = 'localhost';
             config.logger.port = 43501;
         }

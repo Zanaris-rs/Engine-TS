@@ -51,6 +51,13 @@ export interface WorldConfig {
     };
     logger: {
         enabled: boolean;
+        /**
+         * Send the session log to the logger server. Off by default: the
+         * "Server check in" every 50 ticks per player is roughly 86,000 rows a
+         * day at thirty players, and nothing reads them. Reports and wealth
+         * events do not go through this flag.
+         */
+        sessionLog: boolean;
         host: string;
         port: number;
     };
@@ -126,6 +133,7 @@ export function createDefaultWorldConfig(): WorldConfig {
         },
         logger: {
             enabled: false,
+            sessionLog: false,
             host: 'localhost',
             port: 43501
         },
@@ -273,6 +281,7 @@ function migrateFromLegacyEnv(defaults: WorldConfig, env: Record<string, string>
     config.friend.port = tryParseInt(env.FRIEND_PORT, config.friend.port);
 
     config.logger.enabled = tryParseBoolean(env.LOGGER_SERVER, config.logger.enabled);
+    config.logger.sessionLog = tryParseBoolean(env.LOGGER_SESSION_LOG, config.logger.sessionLog);
     config.logger.host = tryParseString(env.LOGGER_HOST, config.logger.host);
     config.logger.port = tryParseInt(env.LOGGER_PORT, config.logger.port);
 

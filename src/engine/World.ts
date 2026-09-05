@@ -113,7 +113,13 @@ type LogoutRequest = {
 class World {
     private loginThread = new Worker(new URL('../server/login/LoginThread.ts', import.meta.url));
     private friendThread = new Worker(new URL('../server/friend/FriendThread.ts', import.meta.url));
-    private loggerThread = new Worker(new URL('../server/logger/LoggerThread.ts', import.meta.url));
+    /**
+     * Null unless `logger.enabled`. The logger server has never run on this
+     * fleet, so every batch this thread was handed was serialised, posted and
+     * dropped on the floor; a world with the logger off now builds nothing and
+     * posts nothing.
+     */
+    private loggerThread: Worker | null = Environment.logger.enabled ? new Worker(new URL('../server/logger/LoggerThread.ts', import.meta.url)) : null;
     private devThread: Worker | null = null;
 
     private static readonly PLAYERS: number = 2047;
@@ -133,11 +139,22 @@ class World {
     /** How long a macro or bug-abuse report watches the offender for. */
     private static readonly REPORT_TRACK_MS: number = 15 * 60 * 1000;
 
+    /** Live tails one world runs at once. Past this a report gets the ring and no tail. */
+    private static readonly MAX_LIVE_CAPTURES: number = 5;
+
     /** How long a relayed `track` watches for; nothing expires it but time. */
     private static readonly RELAY_TRACK_MS: number = 30 * 60 * 1000;
 
     private static readonly TIMEOUT_NO_CONNECTION: number = 50; // 30s with no connection (16 ticks in osrs)
     private static readonly TIMEOUT_NO_RESPONSE: number = 100; // 60s without any response
+
+    /**
+     * Captures in flight, by offender username: the dedupe window, the
+     * concurrency cap and the `evidence_end` that closes the chat window all
+     * read it. Entries leave when their window ends, so it is bounded by how
+     * many people are being watched at once.
+     */
+    private inputCaptures: Map<string, { uuid: string; reportAt: number; accountId: number | null; endsAt: number; live: boolean }> = new Map();
 
     // the game/zones map
     readonly gameMap: GameMap = new GameMap(Environment.node.members);
@@ -435,7 +452,10 @@ class World {
                 this.savePlayers();
             }
 
-            if (tick % World.PLAYER_COORDLOGRATE === 0 && tick > 0) {
+            // the check-in is the bulk of the session log - one row per player
+            // every 50 ticks, about 86,000 a day at thirty players - and
+            // nothing has ever read one, so it is not even built unless asked
+            if (Environment.logger.enabled && Environment.logger.sessionLog && tick % World.PLAYER_COORDLOGRATE === 0 && tick > 0) {
                 for (const player of this.playerLoop.all()) {
                     player.addSessionLog(LoggerEventType.MODERATOR, 'Server check in');
                 }
@@ -443,10 +463,14 @@ class World {
 
             // todo: move this into PLAYER_COORDLOGRATE if memory usage is sane?
             if (this.sessionLogs.length > 0) {
-                this.loggerThread.postMessage({
-                    type: 'session_log',
-                    logs: this.sessionLogs
-                });
+                // cleared either way: scripts add session logs of their own, and
+                // a world with the log switched off must not accumulate them
+                if (this.loggerThread && Environment.logger.sessionLog) {
+                    this.loggerThread.postMessage({
+                        type: 'session_log',
+                        logs: this.sessionLogs
+                    });
+                }
 
                 this.sessionLogs = [];
             }
@@ -458,12 +482,16 @@ class World {
             }
 
             if (this.wealthTransactions.length > 0) {
-                this.loggerThread.postMessage({
+                this.loggerThread?.postMessage({
                     type: 'wealth_event',
                     events: this.wealthTransactions
                 });
 
                 this.wealthTransactions = [];
+            }
+
+            if (this.inputCaptures.size > 0) {
+                this.expireInputCaptures(Date.now());
             }
 
             this.cycleStats[WorldStat.CYCLE] = Date.now() - start; // set the main logic stat here, before telemetry.
@@ -2069,8 +2097,9 @@ class World {
                         // there is no report behind a relayed track, so it gets
                         // an evidence key of its own: whoever asked for it wants
                         // the stream, and `report_input` is where the stream goes
-                        this.beginInputCapture(player, randomUUID(), Date.now(), World.RELAY_TRACK_MS);
+                        this.captureInput(player.username, player, Date.now(), World.RELAY_TRACK_MS);
                     } else {
+                        this.inputCaptures.delete(player.username);
                         player.input.untrack();
                     }
                 }
@@ -2354,15 +2383,29 @@ class World {
         });
     }
 
-    notifyPlayerReport(player: Player, offender: string, reason: ReportAbuseReason) {
-        if (reason === ReportAbuseReason.MACROING || reason === ReportAbuseReason.BUG_ABUSE) {
-            const offenderPlayer = this.getPlayerByUsername(offender);
-            if (offenderPlayer) {
-                // the ring already holds the minutes before this moment; the
-                // tail records the ones after it
-                this.beginInputCapture(offenderPlayer, randomUUID(), Date.now(), World.REPORT_TRACK_MS);
-            }
-        }
+    /**
+     * A Report Abuse, and - for the two reasons a mouse stream can answer - the
+     * evidence that goes with it.
+     *
+     * The uuid is generated here rather than by either hub process, because
+     * both of them need it and neither can wait for the other: the login server
+     * writes it on the `report` row and the logger server writes it on every
+     * `report_input` and `report_chat` row, and the two never speak.
+     *
+     * One capture per offender per window. A macroer reported by six people in
+     * the same minute is the ordinary case, and six copies of the same fifteen
+     * minutes of mouse movement is six times the rows for no more information,
+     * so the later reports point at the first one's evidence.
+     */
+    notifyPlayerReport(player: Player, offender: string, reason: ReportAbuseReason, trackMs: number = World.REPORT_TRACK_MS) {
+        const now = Date.now();
+        const offenderPlayer = this.getPlayerByUsername(offender);
+        const wanted = reason === ReportAbuseReason.MACROING || reason === ReportAbuseReason.BUG_ABUSE;
+
+        // the ring already holds the minutes before this moment; the tail
+        // records the ones after it
+        const uuid = wanted && offenderPlayer ? this.captureInput(offender, offenderPlayer, now, trackMs) : null;
+
         // to the login thread, not the logger: the logger server is disabled on
         // this fleet, so every report used to be dropped while the player was
         // told it had been received. The login server owns the `report` table
@@ -2373,8 +2416,80 @@ class World {
             session_uuid: player.session,
             coord: player.coord,
             offender,
-            reason
+            reason,
+            uuid,
+            // resolved here only when the offender is on this world; the login
+            // server resolves the account from the username either way
+            offender_account_id: offenderPlayer && offenderPlayer.account_id > 0 ? offenderPlayer.account_id : null,
+            offender_session_uuid: offenderPlayer ? offenderPlayer.session : null,
+            offender_coord: offenderPlayer ? offenderPlayer.coord : null
         });
+    }
+
+    /**
+     * Point a player's input ring at a report, and answer with the report's uuid.
+     *
+     * A capture already running for this offender is reused whole: same uuid,
+     * same window, no second tail. Past {@link World.MAX_LIVE_CAPTURES}
+     * concurrent tails the report still gets everything the ring was holding -
+     * the ten minutes before it, which is the half that matters - but nothing
+     * after it, so a bot raid reporting itself cannot turn one world into a
+     * chunk-a-second writer.
+     */
+    private captureInput(offender: string, player: Player, now: number, trackMs: number): string {
+        const running = this.inputCaptures.get(offender);
+
+        if (running) {
+            return running.uuid;
+        }
+
+        let live = 0;
+        for (const state of this.inputCaptures.values()) {
+            if (state.live) {
+                live++;
+            }
+        }
+
+        const capture = {
+            uuid: randomUUID(),
+            reportAt: now,
+            accountId: player.account_id > 0 ? player.account_id : null
+        };
+
+        const tail = live < World.MAX_LIVE_CAPTURES;
+
+        this.inputCaptures.set(offender, { ...capture, endsAt: now + trackMs, live: tail });
+
+        if (tail) {
+            player.input.track(now + trackMs, capture);
+        } else {
+            player.input.dumpRing(capture);
+        }
+
+        return capture.uuid;
+    }
+
+    /**
+     * Close the window on any capture whose time is up. `evidence_end` is what
+     * tells the logger server to copy the after-window chat, so it is posted
+     * for a ring-only capture too: there is no input tail to end, but there is
+     * still a quarter of an hour of the offender's chat worth keeping.
+     */
+    private expireInputCaptures(now: number) {
+        for (const [offender, state] of this.inputCaptures) {
+            if (now < state.endsAt) {
+                continue;
+            }
+
+            this.inputCaptures.delete(offender);
+
+            this.loggerThread?.postMessage({
+                type: 'evidence_end',
+                report_uuid: state.uuid,
+                offender_account_id: state.accountId,
+                ended_at: now
+            });
+        }
     }
 
     /**
@@ -2386,19 +2501,6 @@ class World {
      * Everything the logger server needs to file the row and to copy the chat
      * window rides along, so it never has to ask the login server anything.
      */
-    /**
-     * Point a player's input ring at a report and start the live tail. The ring
-     * is drained inside `track()`, so the chunks from before this instant are
-     * on their way before the first live one is.
-     */
-    private beginInputCapture(player: Player, uuid: string, reportAt: number, trackMs: number) {
-        player.input.track(reportAt + trackMs, {
-            uuid,
-            reportAt,
-            accountId: player.account_id > 0 ? player.account_id : null
-        });
-    }
-
     submitInputTracking(player: Player, chunk: InputChunk, kind: 'ring' | 'live') {
         const capture = player.input.capture;
 
@@ -2406,7 +2508,7 @@ class World {
             return;
         }
 
-        this.loggerThread.postMessage({
+        this.loggerThread?.postMessage({
             type: 'report_evidence',
             kind: 'input',
             report_uuid: capture.uuid,

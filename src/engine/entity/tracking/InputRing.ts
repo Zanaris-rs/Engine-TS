@@ -212,6 +212,14 @@ export default class InputRing {
         }
     }
 
+    /**
+     * Seal whatever is in flight without touching the tail. A report that only
+     * gets the ring dump still wants the seconds since the last rotation.
+     */
+    flush(now: number): void {
+        this.rotate(now);
+    }
+
     /** The finished chunks, oldest first; the ring is left empty. */
     drainRing(): InputChunk[] {
         const chunks = this.chunks;
