@@ -5,7 +5,25 @@ import test from 'node:test';
 import { DummyDriver, Kysely, PostgresAdapter, PostgresIntrospector, PostgresQueryCompiler, SqliteAdapter, SqliteIntrospector, SqliteQueryCompiler } from 'kysely';
 
 import type { DB } from '#/db/types.js';
-import { MAX_MESSAGE_COUNT, MESSAGE_KINDS, NOTICE_KIND, banNotice, clampMessageCount, formatUntil, muteNotice, noticeActor, recentNoticeQuery, rewriteNoticeQuery, unreadQuery } from '#/server/login/MessageCentre.js';
+import {
+    AUTOMATED_ACTOR,
+    MAX_MESSAGE_COUNT,
+    MESSAGE_KINDS,
+    NOTICE_KIND,
+    PUNISHMENT_KINDS,
+    banNotice,
+    clampMessageCount,
+    formatUntil,
+    isAutomatedActor,
+    liftPunishmentsQuery,
+    muteNotice,
+    noticeActor,
+    punishmentInsertQuery,
+    punishmentsQuery,
+    recentNoticeQuery,
+    rewriteNoticeQuery,
+    unreadQuery
+} from '#/server/login/MessageCentre.js';
 
 const fixture = JSON.parse(readFileSync(new URL('./fixtures/message-centre-contract.json', import.meta.url), 'utf8')) as {
     unread_sql: string;
@@ -183,4 +201,83 @@ test('a mute notice says what a mute actually does', () => {
     assert.match(notice.body, /an automated check/);
     assert.match(notice.body, /public chat/);
     assert.ok(notice.body.length <= fixture.limits.body);
+});
+
+test('a punishment is a ban or a mute, and nothing else', () => {
+    assert.deepEqual([...PUNISHMENT_KINDS], ['ban', 'mute']);
+    assert.equal(AUTOMATED_ACTOR, 'automated');
+    assert.ok(isAutomatedActor(AUTOMATED_ACTOR));
+    assert.ok(!isAutomatedActor('mod_matt'));
+    // the notice and the row have to agree on what "nobody decided this" is,
+    // or one says "an automated check" while the other names a moderator
+    assert.equal(noticeActor(AUTOMATED_ACTOR), 'an automated check');
+});
+
+test('the punishment insert names every public column, on postgres', () => {
+    const { sql, parameters } = punishmentInsertQuery(postgres, {
+        accountId: 7,
+        username: 'bob',
+        kind: 'ban',
+        issuedAt: '2026-09-06T14:33:00.000Z',
+        until: '2026-09-13T14:33:00.000Z',
+        automated: false,
+        issuedByAccountId: 9
+    }).compile();
+
+    assert.equal(plain(sql), 'insert into punishment (account_id, username, kind, issued_at, until, automated, issued_by_account_id, note, lifted_at) values ($1, $2, $3, $4, $5, $6, $7, $8, $9)');
+    assert.deepEqual(parameters, [7, 'bob', 'ban', '2026-09-06T14:33:00.000Z', '2026-09-13T14:33:00.000Z', false, 9, null, null]);
+});
+
+test('the same insert on sqlite, with the automated actor and no issuer', () => {
+    const { sql, parameters } = punishmentInsertQuery(sqlite, {
+        accountId: 7,
+        username: 'bob',
+        kind: 'mute',
+        issuedAt: '2026-09-06 14:33:00',
+        until: '2026-09-08 14:33:00',
+        automated: true,
+        issuedByAccountId: null
+    }).compile();
+
+    assert.equal(plain(sql), 'insert into punishment (account_id, username, kind, issued_at, until, automated, issued_by_account_id, note, lifted_at) values (?, ?, ?, ?, ?, ?, ?, ?, ?)');
+    assert.deepEqual(parameters, [7, 'bob', 'mute', '2026-09-06 14:33:00', '2026-09-08 14:33:00', true, null, null, null]);
+    // the timestamps are bound, not spelled: `now()` here would be a statement
+    // sqlite does not have and a clock the login server does not control
+    assert.doesNotMatch(sql, /now\(\)|CURRENT_TIMESTAMP|returning/i);
+});
+
+test('the public record never selects the issuer, for one account or for all', () => {
+    const columns = 'select id, username, kind, issued_at, until, automated, note, lifted_at from punishment';
+
+    const one = punishmentsQuery(postgres, 7, 50).compile();
+    assert.equal(plain(one.sql), `${columns} where account_id = $1 order by issued_at desc, id desc limit $2`);
+    assert.deepEqual(one.parameters, [7, 50]);
+
+    const all = punishmentsQuery(sqlite, null, 50).compile();
+    assert.equal(plain(all.sql), `${columns} order by issued_at desc, id desc limit ?`);
+    assert.deepEqual(all.parameters, [50]);
+
+    // issued_by_account_id and lifted_by_account_id are the two columns a staff
+    // name could be joined out of, and neither leaves this query
+    assert.doesNotMatch(one.sql, /issued_by_account_id|lifted_by_account_id/);
+    assert.doesNotMatch(all.sql, /issued_by_account_id|lifted_by_account_id/);
+});
+
+test('lifting only touches punishments that are still in force', () => {
+    const now = new Date('2026-09-06T14:33:00.000Z');
+    const { sql, parameters } = liftPunishmentsQuery(postgres, 7, '2026-09-06T14:33:00.000Z', 9, now).compile();
+
+    // a ban that already expired was not lifted by anybody, and stamping it
+    // would have the public page crediting a moderator with the calendar
+    assert.equal(plain(sql), 'update punishment set lifted_at = $1, lifted_by_account_id = $2 where account_id = $3 and lifted_at is null and (until is null or until > $4)');
+    assert.deepEqual(parameters, ['2026-09-06T14:33:00.000Z', 9, 7, now]);
+});
+
+test('the lift is the same statement on sqlite, and lifted by nobody is null', () => {
+    const now = new Date('2026-09-06T14:33:00.000Z');
+    const { sql, parameters } = liftPunishmentsQuery(sqlite, 7, '2026-09-06 14:33:00', null, now).compile();
+
+    assert.equal(plain(sql), 'update punishment set lifted_at = ?, lifted_by_account_id = ? where account_id = ? and lifted_at is null and (until is null or until > ?)');
+    assert.deepEqual(parameters, ['2026-09-06 14:33:00', null, 7, now]);
+    assert.doesNotMatch(sql, /now\(\)|CURRENT_TIMESTAMP|returning/i);
 });

@@ -10,7 +10,7 @@ import { PlayerLoading } from '#/engine/entity/PlayerLoading.js';
 import Packet from '#/io/Packet.js';
 import { updateHiscores } from '#/server/login/Hiscores.js';
 import { handleWithFailureReply, retryReply, type ReplyId, type SendReply } from '#/server/login/LoginMessage.js';
-import { banNotice, countUnread, muteNotice, type ModerationNotice, NOTICE_DUPLICATE_WINDOW_MS, recentNoticeQuery, rewriteNoticeQuery } from '#/server/login/MessageCentre.js';
+import { banNotice, countUnread, isAutomatedActor, muteNotice, type ModerationNotice, NOTICE_DUPLICATE_WINDOW_MS, type PunishmentKind, punishmentInsertQuery, recentNoticeQuery, rewriteNoticeQuery } from '#/server/login/MessageCentre.js';
 import Environment from '#/util/Environment.js';
 import { toSafeName } from '#/util/JString.js';
 import { printInfo } from '#/util/Logger.js';
@@ -65,7 +65,7 @@ async function writeModerationNotice(username: string, notice: ModerationNotice,
         // it is a reserved username, so there is no row to find and the notice
         // is written with no author - which is what "an automated check" in the
         // body already tells the player.
-        const staff = staffUsername === 'automated' ? undefined : await db.selectFrom('account').select('id').where('username', '=', staffUsername).executeTakeFirst();
+        const staff = isAutomatedActor(staffUsername) ? undefined : await db.selectFrom('account').select('id').where('username', '=', staffUsername).executeTakeFirst();
 
         const recent = await recentNoticeQuery(db, account.id, notice.kind, new Date(Date.now() - NOTICE_DUPLICATE_WINDOW_MS)).executeTakeFirst();
 
@@ -89,6 +89,46 @@ async function writeModerationNotice(username: string, notice: ModerationNotice,
         // the ban itself has already landed; losing the courtesy note must not
         // turn a moderation action into an unhandled rejection
         console.error('could not write the %s notice for %s', notice.kind, username, err);
+    }
+}
+
+/**
+ * The permanent half of a ban or a mute.
+ *
+ * The notice above is a message and can be rewritten; this row is the public
+ * record and never is. A ban extended from five minutes to a week leaves one
+ * notice - the true one - and two punishment rows, because two decisions were
+ * taken and `/bans` shows the history rather than the latest state.
+ *
+ * It is a separate try/catch from the notice on purpose. They are two
+ * independent consequences of one decision, and the account row that actually
+ * stops the login has already been written by the time either runs: a database
+ * failure should cost at most one of them.
+ */
+async function recordPunishment(kind: PunishmentKind, username: string, until: Date, staffUsername: string) {
+    try {
+        const account = await db.selectFrom('account').select('id').where('username', '=', username).executeTakeFirst();
+
+        if (!account) {
+            return;
+        }
+
+        const automated = isAutomatedActor(staffUsername);
+        const staff = automated ? undefined : await db.selectFrom('account').select('id').where('username', '=', staffUsername).executeTakeFirst();
+
+        await punishmentInsertQuery(db, {
+            accountId: account.id,
+            username,
+            kind,
+            issuedAt: toDbDate(new Date()),
+            until: toDbDate(until),
+            automated,
+            // the public page says "automated" or "a moderator" and nothing
+            // more, but the id is what a staff audit needs to exist at all
+            issuedByAccountId: staff?.id ?? null
+        }).execute();
+    } catch (err) {
+        console.error('could not record the %s of %s', kind, username, err);
     }
 }
 
@@ -529,6 +569,7 @@ export default class LoginServer {
                             .where('username', '=', username)
                             .executeTakeFirst();
 
+                        await recordPunishment('ban', username, new Date(until), staff);
                         await writeModerationNotice(username, banNotice(staff, new Date(until)), staff);
                     } else if (type === 'player_mute') {
                         const { staff, username, until } = msg;
@@ -543,6 +584,7 @@ export default class LoginServer {
                             .where('username', '=', username)
                             .executeTakeFirst();
 
+                        await recordPunishment('mute', username, new Date(until), staff);
                         await writeModerationNotice(username, muteNotice(staff, new Date(until)), staff);
                     } else if (type === 'player_report') {
                         // Report Abuse used to go to the logger thread, and the

@@ -6,7 +6,16 @@ import { toDisplayName } from '#/util/JString.js';
 /**
  * The Message Centre, as far as the login server is concerned: the unread
  * count that goes on the client's welcome screen, and the notices a ban or a
- * mute leaves behind.
+ * mute leaves behind - and, since the same two messages now leave a permanent
+ * record as well, the rest of the login server's record writing: `punishment`
+ * and `staff_spawn`.
+ *
+ * Everything here is a query builder rather than a call, for one reason: the
+ * engine runs on postgres, sqlite and mysql, and the only way to prove a
+ * statement is dialect-neutral without three databases is to compile it
+ * against two dialects and read the SQL back. `test/MessageCentre.test.ts`
+ * does exactly that, and it is why nothing below says `now()`, `returning` or
+ * anything else one backend spells differently.
  *
  * The unread rule is one line, and it is a contract shared with the website
  * and with `accounts.unread()` in migration `3_message_centre`:
@@ -126,13 +135,26 @@ export function formatUntil(until: Date): string {
 }
 
 /**
+ * The actor `::ban` and `::mute` pass when nobody decided: report abuse with a
+ * reason code outside the enum, private-message spam. It is a reserved
+ * username, so there is no account row behind it - which is why the notice is
+ * written with no author and the punishment row with `automated = true` and no
+ * issuer.
+ */
+export const AUTOMATED_ACTOR = 'automated';
+
+export function isAutomatedActor(staff: string): boolean {
+    return staff === AUTOMATED_ACTOR;
+}
+
+/**
  * `::ban` and `::mute` pass the moderator's own username; the automated paths
  * (report abuse with a bad reason, private-message spam) pass 'automated'.
  * Neither carries a reason: the cheat string is lowercased and capped at 80
  * characters before it reaches the handler, so there is nowhere to put one.
  */
 export function noticeActor(staff: string): string {
-    return staff === 'automated' ? 'an automated check' : toDisplayName(staff);
+    return isAutomatedActor(staff) ? 'an automated check' : toDisplayName(staff);
 }
 
 export type ModerationNotice = { kind: MessageKind; subject: string; body: string };
@@ -157,4 +179,87 @@ export function muteNotice(staff: string, until: Date): ModerationNotice {
 
 If you believe this is a mistake, open a ticket in the Message Centre, choose "appeal", and say what you were doing at the time. A moderator will read it and reply to you here.`
     };
+}
+
+/**
+ * The permanent record, which is a different thing from the notice above.
+ *
+ * A notice is a message to one player and it can be rewritten - a ban extended
+ * inside the hour overwrites the unread row rather than adding a second one.
+ * A punishment row is never rewritten and never deleted: every ban and every
+ * mute leaves one, and `/bans` reads them back through `public_punishments`.
+ * That is why the same decision can leave one notice and two rows, and why
+ * lifting a ban sets `lifted_at` instead of removing anything.
+ *
+ * The two `kind` values are the only ones the public page knows how to render.
+ */
+export const PUNISHMENT_KINDS = ['ban', 'mute'] as const;
+
+export type PunishmentKind = (typeof PUNISHMENT_KINDS)[number];
+
+export type PunishmentRecord = {
+    accountId: number;
+    username: string;
+    kind: PunishmentKind;
+    /** Through `toDbDate` at the call site, which is what knows the backend. */
+    issuedAt: string;
+    /** Null is permanent. Nothing in the engine issues one; the SQL API can. */
+    until: string | null;
+    automated: boolean;
+    /** Null when automated, and null when the moderator has no account row. */
+    issuedByAccountId: number | null;
+};
+
+/**
+ * `note` and `lifted_at` are written as the nulls they are rather than left to
+ * a column default: this is the row the public page reads, and "no note, not
+ * lifted" is a statement about the punishment, not an absence of one.
+ */
+export function punishmentInsertQuery(database: Kysely<DB>, record: PunishmentRecord) {
+    return database.insertInto('punishment').values({
+        account_id: record.accountId,
+        username: record.username,
+        kind: record.kind,
+        issued_at: record.issuedAt,
+        until: record.until,
+        automated: record.automated,
+        issued_by_account_id: record.issuedByAccountId,
+        note: null,
+        lifted_at: null
+    });
+}
+
+/**
+ * The public record for one account, or the newest across everybody when
+ * `accountId` is null. No issuer and no note of who lifted it: `staff` names
+ * never leave the database, which is the rule `public_punishments` enforces on
+ * the website's side and this mirrors on the shell's.
+ */
+export function punishmentsQuery(database: Kysely<DB>, accountId: number | null, limit: number) {
+    const query = database.selectFrom('punishment').select(['id', 'username', 'kind', 'issued_at', 'until', 'automated', 'note', 'lifted_at']).orderBy('issued_at', 'desc').orderBy('id', 'desc').limit(limit);
+
+    return accountId === null ? query : query.where('account_id', '=', accountId);
+}
+
+/**
+ * Lifting is the reversal, and it only touches punishments that are still in
+ * force: one that has already run its course was not lifted by anybody, and
+ * stamping it would make the public page say a moderator did something they
+ * did not do.
+ *
+ * `now` goes in as a Date, not a `toDbDate` string: kysely types a comparison
+ * against the column's *read* type. Every backend binds it - the sqlite driver
+ * formats it with the same `toSqlDateTime` `toDbDate` uses. The value being
+ * *written* is the string, as everywhere else.
+ */
+export function liftPunishmentsQuery(database: Kysely<DB>, accountId: number, liftedAt: string, liftedByAccountId: number | null, now: Date) {
+    return database
+        .updateTable('punishment')
+        .set({
+            lifted_at: liftedAt,
+            lifted_by_account_id: liftedByAccountId
+        })
+        .where('account_id', '=', accountId)
+        .where('lifted_at', 'is', null)
+        .where(eb => eb.or([eb('until', 'is', null), eb('until', '>', now)]));
 }
