@@ -11,6 +11,8 @@ const fixture = JSON.parse(readFileSync(new URL('./fixtures/message-centre-contr
     unread_sql: string;
     kinds: string[];
     account_message_columns: string[];
+    ticket_kinds: string[];
+    ticket_statuses: string[];
     limits: {
         subject: number;
         body: number;
@@ -95,6 +97,19 @@ test('every limit in the fixture is the number the migration enforces', () => {
     // and the two lengths, which every writing function checks
     assert.ok(migration.includes(`length(p_subject) > ${limits.subject}`), 'subject');
     assert.ok(migration.includes(`length(p_body) > ${limits.body}`), 'body');
+});
+
+test('the fixture names the ticket kinds and statuses the migration allows', () => {
+    // The website builds its "open a ticket" form from these, and reads the
+    // status filter from them, so a kind added on one side and not the other
+    // is a form that submits something ticket_open refuses.
+    const kinds = fixture.ticket_kinds.map(kind => `'${kind}'`).join(', ');
+    assert.ok(migration.includes(`p_kind NOT IN (${kinds})`), `ticket_kinds: ${kinds}`);
+
+    const [open, closed, ...rest] = fixture.ticket_statuses;
+    assert.deepEqual(rest, [], 'a ticket is open or closed, and the SQL knows no third');
+    assert.ok(migration.includes(`"status" TEXT NOT NULL DEFAULT '${open}'`), `open status: ${open}`);
+    assert.ok(migration.includes(`THEN '${closed}' ELSE status END`), `closed status: ${closed}`);
 });
 
 test('the count is clamped to what p2 can carry', () => {
