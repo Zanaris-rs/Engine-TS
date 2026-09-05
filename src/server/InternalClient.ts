@@ -9,6 +9,18 @@ export default class InternalClient {
     private host: string;
     private port: number;
 
+    /**
+     * The connect in progress, if any.
+     *
+     * Without it, callers that arrive together each open a socket: the second
+     * overwrites `this.ws` while the first is still opening, so the `WsSyncReq`
+     * the first one builds on 'open' wraps a socket that is not yet live, and
+     * every one of those sends is reported as failed. It shows up as a burst of
+     * messages - the sixteen chunks of a macro report's ring, say - arriving as
+     * one message and fifteen retries.
+     */
+    private connecting: Promise<void> | null = null;
+
     constructor(host: string, port: number) {
         this.host = host;
         this.port = port;
@@ -19,6 +31,14 @@ export default class InternalClient {
             return;
         }
 
+        this.connecting ??= this.open().finally(() => {
+            this.connecting = null;
+        });
+
+        return this.connecting;
+    }
+
+    private open(): Promise<void> {
         return new Promise(res => {
             this.ws = new WebSocket(`ws://${this.host}:${this.port}`, {
                 timeout: 5000
