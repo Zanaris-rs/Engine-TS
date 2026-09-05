@@ -5,7 +5,10 @@ tsconfig.tsbuildinfo
 data/pack/
 data/src/
 data/unpack/
-data/config/
+# data/config is local configuration - world.json, the pems - except for the
+# census's tracked-item list, which is the engine's own and ships with it
+data/config/*
+!data/config/economy.json
 
 dump/
 

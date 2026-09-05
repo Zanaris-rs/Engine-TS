@@ -20,6 +20,7 @@
     "db:smoke": "tsx tools/server/db-smoke.ts",
     "db:types": "prisma generate --schema prisma/postgres/schema.prisma",
     "dev": "tsx watch src/app.ts",
+    "economy": "tsx tools/server/economy.ts",
     "friend": "tsx src/friend.ts",
     "lint": "eslint --no-warn-ignored src tools test",
     "logger": "tsx src/logger.ts",
