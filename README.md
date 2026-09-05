@@ -319,7 +319,11 @@ logs which one it read.
 
 A save that cannot be read **stops the run** rather than being skipped, because
 every item in it would otherwise read as having left the game. Fix or remove the
-file, or pass `--skip-unreadable` once you have looked at it.
+file, or pass `--skip-unreadable` once you have looked at it. A directory with
+no saves in it writes nothing at all and exits cleanly: "the game contains
+nothing" is nearly always "this ran in the wrong directory", and recording it
+would make the next census report the entire game as having entered it that
+hour.
 
 ## Dependencies
 

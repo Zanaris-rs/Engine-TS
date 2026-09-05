@@ -214,14 +214,23 @@ if (takeFlag(args, '--help') || takeFlag(args, '-h')) {
 const dryRun = takeFlag(args, '--dry-run');
 const skipUnreadable = takeFlag(args, '--skip-unreadable');
 const profile = takeOption(args, '--profile') ?? Environment.node.profile;
-const playersDir = takeOption(args, '--players') ?? path.join('data/players', profile);
+const chosenDir = takeOption(args, '--players');
+const playersDir = chosenDir ?? path.join('data/players', profile);
 
 if (args.length > 0) {
     fail(`Unrecognized argument '${args[0]}'.\n\n${USAGE}`);
 }
 
 if (!fs.existsSync(playersDir)) {
-    fail(`No save directory at ${path.resolve(playersDir)}. Pass --players <dir> or --profile <name>.`);
+    if (chosenDir) {
+        // somebody typed this path; a typo should not look like an empty world
+        fail(`No save directory at ${path.resolve(chosenDir)}.`);
+    }
+
+    // a hub whose first player has not logged out yet. Not an error, and not a
+    // census either: see the zero-saves guard below for why nothing is written
+    console.log(`[economy] no saves yet at ${path.resolve(playersDir)}; nothing to census`);
+    process.exit(0);
 }
 
 const started = Date.now();
@@ -229,6 +238,14 @@ const tracked = loadTracked();
 console.log(`[economy] tracking ${tracked.items.length} items from ${tracked.source}`);
 
 const counted = census(playersDir, loadInvs());
+
+if (counted.players === 0) {
+    // "the game contains nothing" is almost always "this ran in the wrong
+    // directory", and writing it would make the next census report every item
+    // in the game as having entered it this hour
+    console.log(`[economy] no saves in ${path.resolve(playersDir)}; nothing written`);
+    process.exit(0);
+}
 
 if (counted.unreadable.length > 0) {
     for (const line of counted.unreadable) {
