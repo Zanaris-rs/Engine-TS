@@ -25,6 +25,13 @@ export const MESSAGE_KINDS = ['welcome', 'notice', 'ban', 'mute', 'reply'] as co
 export type MessageKind = (typeof MESSAGE_KINDS)[number];
 
 /**
+ * A standalone message from a person: what the staff CLI and the website's
+ * `staff_notice` both write. Named rather than indexed off MESSAGE_KINDS, so
+ * reordering that list cannot quietly change what a notice is.
+ */
+export const NOTICE_KIND: MessageKind = 'notice';
+
+/**
  * LAST_LOGIN_INFO writes the count with `p2`, so anything above 65535 wraps
  * and a player with 70,000 unread messages would be told they have 4,464.
  */

@@ -5,14 +5,26 @@ import test from 'node:test';
 import { DummyDriver, Kysely, PostgresAdapter, PostgresIntrospector, PostgresQueryCompiler, SqliteAdapter, SqliteIntrospector, SqliteQueryCompiler } from 'kysely';
 
 import type { DB } from '#/db/types.js';
-import { MAX_MESSAGE_COUNT, MESSAGE_KINDS, banNotice, clampMessageCount, formatUntil, muteNotice, noticeActor, recentNoticeQuery, unreadQuery } from '#/server/login/MessageCentre.js';
+import { MAX_MESSAGE_COUNT, MESSAGE_KINDS, NOTICE_KIND, banNotice, clampMessageCount, formatUntil, muteNotice, noticeActor, recentNoticeQuery, unreadQuery } from '#/server/login/MessageCentre.js';
 
 const fixture = JSON.parse(readFileSync(new URL('./fixtures/message-centre-contract.json', import.meta.url), 'utf8')) as {
     unread_sql: string;
     kinds: string[];
     account_message_columns: string[];
-    limits: { subject: number; body: number; message_count: number; tickets_per_account_per_day: number };
+    limits: {
+        subject: number;
+        body: number;
+        message_count: number;
+        tickets_per_account_per_day: number;
+        ticket_replies_per_account_per_hour: number;
+        staff_notices_per_actor_per_hour: number;
+    };
 };
+
+// The SQL API is the thing that actually enforces the limits, and the website
+// reads them from the fixture rather than hard-coding them. Reading the
+// migration back is what stops the two drifting.
+const migration = readFileSync(new URL('../prisma/postgres/migrations/3_message_centre/migration.sql', import.meta.url), 'utf8');
 
 // No driver, so nothing connects: these compile queries and throw the plan
 // away, which is the only way to test the SQL text without a database.
@@ -56,6 +68,8 @@ test('the unread query is the same on sqlite, down to the placeholder', () => {
 
 test('the contract names the kinds the engine writes', () => {
     assert.deepEqual([...MESSAGE_KINDS], fixture.kinds);
+    assert.equal(NOTICE_KIND, 'notice');
+    assert.ok(fixture.kinds.includes(NOTICE_KIND));
     assert.equal(banNotice('mod_matt', new Date()).kind, 'ban');
     assert.equal(muteNotice('mod_matt', new Date()).kind, 'mute');
 });
@@ -64,6 +78,23 @@ test('the contract names every account_message column, in order', () => {
     // A column added to the table without a line here is a column the website
     // does not know it can read.
     assert.deepEqual(fixture.account_message_columns, ['id', 'account_id', 'ticket_id', 'kind', 'subject', 'body', 'created_by_account_id', 'created_at', 'read_at']);
+});
+
+test('every limit in the fixture is the number the migration enforces', () => {
+    const { limits } = fixture;
+
+    // ticket_open: five tickets per account per day
+    assert.ok(migration.includes(`IF v_today >= ${limits.tickets_per_account_per_day} THEN RETURN 'rate_limited'`), 'tickets_per_account_per_day');
+
+    // ticket_reply: the player's own messages in the last hour
+    assert.ok(migration.includes(`IF v_recent >= ${limits.ticket_replies_per_account_per_hour} THEN RETURN 'rate_limited'`), 'ticket_replies_per_account_per_hour');
+
+    // staff_notice: one actor's notices in the last hour
+    assert.ok(migration.includes(`IF v_hour >= ${limits.staff_notices_per_actor_per_hour} THEN RETURN 'rate_limited'`), 'staff_notices_per_actor_per_hour');
+
+    // and the two lengths, which every writing function checks
+    assert.ok(migration.includes(`length(p_subject) > ${limits.subject}`), 'subject');
+    assert.ok(migration.includes(`length(p_body) > ${limits.body}`), 'body');
 });
 
 test('the count is clamped to what p2 can carry', () => {

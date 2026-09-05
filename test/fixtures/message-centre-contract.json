@@ -9,6 +9,8 @@
         "subject": 120,
         "body": 4000,
         "message_count": 65535,
-        "tickets_per_account_per_day": 5
+        "tickets_per_account_per_day": 5,
+        "ticket_replies_per_account_per_hour": 20,
+        "staff_notices_per_actor_per_hour": 20
     }
 }

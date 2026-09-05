@@ -80,6 +80,14 @@ CREATE INDEX IF NOT EXISTS "ticket_account_id_updated_at_idx" ON "ticket"("accou
 CREATE INDEX IF NOT EXISTS "ticket_status_updated_at_idx" ON "ticket"("status", "updated_at" DESC);
 CREATE INDEX IF NOT EXISTS "ticket_message_ticket_id_created_at_idx" ON "ticket_message"("ticket_id", "created_at");
 
+-- The rate limits below are counting scans, not lookups: ticket_reply counts a
+-- player's own messages in the last hour and staff_notice counts one actor's
+-- notices in the last hour, both on tables that only ever grow. And
+-- staff_reports orders every report by timestamp.
+CREATE INDEX IF NOT EXISTS "ticket_message_author_account_id_created_at_idx" ON "ticket_message"("author_account_id", "created_at");
+CREATE INDEX IF NOT EXISTS "staff_action_actor_account_id_action_created_at_idx" ON "staff_action"("actor_account_id", "action", "created_at");
+CREATE INDEX IF NOT EXISTS "report_timestamp_idx" ON "report"("timestamp" DESC);
+
 ALTER TABLE "account_message" ENABLE ROW LEVEL SECURITY;
 ALTER TABLE "ticket" ENABLE ROW LEVEL SECURITY;
 ALTER TABLE "ticket_message" ENABLE ROW LEVEL SECURITY;
@@ -264,8 +272,10 @@ END; $$;
 -- ---------------------------------------------------------------------------
 
 -- `awaiting_staff` is true when the newest message on the ticket is the
--- player's, which is the only ordering staff actually want.
-CREATE OR REPLACE FUNCTION accounts.staff_inbox(p_actor text)
+-- player's, which is the only ordering staff actually want. p_status is
+-- 'open' (the default), 'closed', or 'all' for no filter; anything else
+-- matches no status and returns nothing.
+CREATE OR REPLACE FUNCTION accounts.staff_inbox(p_actor text, p_status text DEFAULT 'open')
 RETURNS TABLE (id int, username text, kind text, subject text, status text,
                created_at timestamptz, updated_at timestamptz, awaiting_staff boolean)
 LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $$
@@ -275,7 +285,8 @@ LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $$
                           ORDER BY tm.created_at DESC, tm.id DESC LIMIT 1), false)
     FROM public.ticket t
     JOIN public.account a ON a.id = t.account_id
-    WHERE accounts.is_staff(p_actor) AND t.status = 'open'
+    WHERE accounts.is_staff(p_actor)
+      AND (coalesce(p_status, 'open') = 'all' OR t.status = p_status)
     ORDER BY t.updated_at DESC
     LIMIT 200;
 $$;
@@ -297,12 +308,17 @@ LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $$
     ORDER BY tm.created_at, tm.id;
 $$;
 
--- 'ok' | 'forbidden' | 'not_found' | 'invalid'. Two rows, always: the thread
--- message staff see, and the account_message that makes the player's unread
--- count go up - in game on their next login, on the site immediately.
+-- 'ok' | 'forbidden' | 'not_found' | 'closed' | 'invalid'. Two rows on success,
+-- always: the thread message staff see, and the account_message that makes the
+-- player's unread count go up - in game on their next login, on the site
+-- immediately.
+--
+-- A closed ticket refuses a reply, the same way ticket_reply does for the
+-- player, unless p_close is true: re-closing one, or having the last word on
+-- the way out, is exactly the case where staff still need to write.
 CREATE OR REPLACE FUNCTION accounts.staff_reply(p_actor text, p_ticket_id int, p_body text, p_close boolean) RETURNS text
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $$
-DECLARE v_actor_id int; v_owner_id int; v_subject text;
+DECLARE v_actor_id int; v_owner_id int; v_subject text; v_status text;
 BEGIN
     IF NOT accounts.is_staff(p_actor) THEN RETURN 'forbidden'; END IF;
 
@@ -312,8 +328,10 @@ BEGIN
 
     SELECT a.id INTO v_actor_id FROM public.account a WHERE a.username = p_actor;
 
-    SELECT t.account_id, t.subject INTO v_owner_id, v_subject FROM public.ticket t WHERE t.id = p_ticket_id;
+    SELECT t.account_id, t.subject, t.status INTO v_owner_id, v_subject, v_status
+      FROM public.ticket t WHERE t.id = p_ticket_id;
     IF v_owner_id IS NULL THEN RETURN 'not_found'; END IF;
+    IF v_status <> 'open' AND NOT coalesce(p_close, false) THEN RETURN 'closed'; END IF;
 
     INSERT INTO public.ticket_message (ticket_id, author_account_id, from_staff, body)
     VALUES (p_ticket_id, v_actor_id, true, btrim(p_body));
@@ -349,16 +367,20 @@ BEGIN
     IF NOT accounts.is_staff(p_actor) THEN RETURN 'forbidden'; END IF;
 
     -- The re-type rides the same limiter as website login (ten failures per
-    -- name per fifteen minutes). There is no ip to pass - the route calls this
-    -- with the session's username only - so the actor's own name stands in for
-    -- one, which keeps a mistyped staff password out of any real ip's bucket.
-    IF accounts.throttled(p_actor, p_actor) THEN RETURN 'rate_limited'; END IF;
+    -- name per fifteen minutes), but in a bucket of its own: keyed on the bare
+    -- username, ten fat-fingered notices would also lock the moderator out of
+    -- signing in, and losing your own account because you mistyped a password
+    -- into a form you were already signed in to is absurd. There is no ip to
+    -- pass either - the route calls this with the session's username only - so
+    -- the prefixed name stands in for one as well, which keeps these failures
+    -- out of every real address's bucket too.
+    IF accounts.throttled('notice:' || p_actor, p_actor) THEN RETURN 'rate_limited'; END IF;
 
     SELECT a.id, a.password INTO v_actor_id, v_password FROM public.account a WHERE a.username = p_actor;
 
     IF p_actor_candidate_hash IS NULL OR length(p_actor_candidate_hash) <> 60
        OR v_password IS NULL OR v_password <> p_actor_candidate_hash THEN
-        PERFORM accounts.record_failure(p_actor, p_actor);
+        PERFORM accounts.record_failure('notice:' || p_actor, p_actor);
         RETURN 'bad_credentials';
     END IF;
 
@@ -520,7 +542,7 @@ REVOKE ALL ON FUNCTION accounts.tickets(text) FROM PUBLIC;
 REVOKE ALL ON FUNCTION accounts.ticket_thread(text, int) FROM PUBLIC;
 REVOKE ALL ON FUNCTION accounts.ticket_open(text, text, text, text) FROM PUBLIC;
 REVOKE ALL ON FUNCTION accounts.ticket_reply(text, int, text) FROM PUBLIC;
-REVOKE ALL ON FUNCTION accounts.staff_inbox(text) FROM PUBLIC;
+REVOKE ALL ON FUNCTION accounts.staff_inbox(text, text) FROM PUBLIC;
 REVOKE ALL ON FUNCTION accounts.staff_thread(text, int) FROM PUBLIC;
 REVOKE ALL ON FUNCTION accounts.staff_reply(text, int, text, boolean) FROM PUBLIC;
 REVOKE ALL ON FUNCTION accounts.staff_notice(text, text, text, text, text) FROM PUBLIC;
@@ -534,7 +556,7 @@ GRANT EXECUTE ON FUNCTION accounts.tickets(text) TO website;
 GRANT EXECUTE ON FUNCTION accounts.ticket_thread(text, int) TO website;
 GRANT EXECUTE ON FUNCTION accounts.ticket_open(text, text, text, text) TO website;
 GRANT EXECUTE ON FUNCTION accounts.ticket_reply(text, int, text) TO website;
-GRANT EXECUTE ON FUNCTION accounts.staff_inbox(text) TO website;
+GRANT EXECUTE ON FUNCTION accounts.staff_inbox(text, text) TO website;
 GRANT EXECUTE ON FUNCTION accounts.staff_thread(text, int) TO website;
 GRANT EXECUTE ON FUNCTION accounts.staff_reply(text, int, text, boolean) TO website;
 GRANT EXECUTE ON FUNCTION accounts.staff_notice(text, text, text, text, text) TO website;

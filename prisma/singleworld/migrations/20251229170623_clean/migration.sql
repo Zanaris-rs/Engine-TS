@@ -239,6 +239,9 @@ CREATE INDEX "login_attempt_ip_created_at_idx" ON "login_attempt"("ip", "created
 CREATE INDEX "session_profile_account_id_timestamp_idx" ON "session"("profile", "account_id", "timestamp" DESC);
 
 -- CreateIndex
+CREATE INDEX "report_timestamp_idx" ON "report"("timestamp" DESC);
+
+-- CreateIndex
 CREATE INDEX "account_message_account_id_read_at_idx" ON "account_message"("account_id", "read_at");
 
 -- CreateIndex
@@ -252,4 +255,10 @@ CREATE INDEX "ticket_status_updated_at_idx" ON "ticket"("status", "updated_at" D
 
 -- CreateIndex
 CREATE INDEX "ticket_message_ticket_id_created_at_idx" ON "ticket_message"("ticket_id", "created_at");
+
+-- CreateIndex
+CREATE INDEX "ticket_message_author_account_id_created_at_idx" ON "ticket_message"("author_account_id", "created_at");
+
+-- CreateIndex
+CREATE INDEX "staff_action_actor_account_id_action_created_at_idx" ON "staff_action"("actor_account_id", "action", "created_at");
 

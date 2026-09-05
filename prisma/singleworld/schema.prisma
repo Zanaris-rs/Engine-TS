@@ -192,6 +192,8 @@ model report {
     // before the login server took the packet over from the (disabled) logger.
     reporter_account_id Int?
     world               Int?
+
+    @@index([timestamp(sort: Desc)])
 }
 
 model input_report {
@@ -266,6 +268,7 @@ model ticket_message {
     created_at DateTime @default(now())
 
     @@index([ticket_id, created_at])
+    @@index([author_account_id, created_at])
 }
 
 model staff_action {
@@ -277,4 +280,6 @@ model staff_action {
     target           String
 
     created_at DateTime @default(now())
+
+    @@index([actor_account_id, action, created_at])
 }

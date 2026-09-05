@@ -44,6 +44,7 @@ CREATE TABLE `ticket_message` (
     `created_at` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
 
     INDEX `ticket_message_ticket_id_created_at_idx`(`ticket_id`, `created_at`),
+    INDEX `ticket_message_author_account_id_created_at_idx`(`author_account_id`, `created_at`),
     PRIMARY KEY (`id`)
 ) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 
@@ -55,6 +56,10 @@ CREATE TABLE `staff_action` (
     `target` VARCHAR(191) NOT NULL,
     `created_at` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
 
+    INDEX `staff_action_actor_account_id_action_created_at_idx`(`actor_account_id`, `action`, `created_at`),
     PRIMARY KEY (`id`)
 ) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+
+-- CreateIndex
+CREATE INDEX `report_timestamp_idx` ON `report`(`timestamp` DESC);
 
