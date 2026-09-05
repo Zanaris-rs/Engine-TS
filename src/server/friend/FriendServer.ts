@@ -386,7 +386,9 @@ export class FriendServer {
         // does not spend its one act deleting rows
         setTimeout(() => {
             void this.sweepChat();
-            setInterval(() => void this.sweepChat(), CHAT_SWEEP_INTERVAL_MS);
+            // unref'd like the timeout: the websocket server is what should
+            // decide this process is still alive, not a retention timer
+            setInterval(() => void this.sweepChat(), CHAT_SWEEP_INTERVAL_MS).unref();
         }, CHAT_SWEEP_DELAY_MS).unref();
     }
 

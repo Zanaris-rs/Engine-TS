@@ -81,6 +81,14 @@ export default class InputTracking {
     }
 
     /**
+     * A second report on somebody already being watched: push the end of the
+     * window back rather than opening a second capture over the same minutes.
+     */
+    extend(untilMs: number): void {
+        this.ring.extend(untilMs);
+    }
+
+    /**
      * Submit what the ring holds and nothing more: the world is already running
      * as many live tails as it will, so this report gets the minutes before it
      * and no tail of its own.

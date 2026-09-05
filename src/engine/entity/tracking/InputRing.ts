@@ -193,8 +193,27 @@ export default class InputRing {
             return;
         }
 
-        this.rotate(now);
+        // sealed as live on `until`, not on `isTracked(now)`: a tail whose time
+        // ran out a moment ago but which `onCycle` has not swept yet still
+        // captured every byte in that chunk after the report, and routing it
+        // into the ring would throw the last seconds of the evidence away.
+        if (this.pos > 0) {
+            this.seal(now, true);
+        }
+
         this.until = 0;
+    }
+
+    /**
+     * Push the tail's end back. A second report on somebody already being
+     * watched extends the window it already has rather than opening another
+     * one, and unlike `track()` this leaves the chunk in flight alone - there
+     * is no new "the live tail begins here" to mark, because it did not.
+     */
+    extend(untilMs: number): void {
+        if (this.until > 0 && untilMs > this.until) {
+            this.until = untilMs;
+        }
     }
 
     /**
@@ -204,7 +223,7 @@ export default class InputRing {
      */
     onCycle(now: number): void {
         if (this.until > 0 && now >= this.until) {
-            this.untrackExpired(now);
+            this.untrack(now);
         }
 
         if (this.pos > 0 && (this.pos >= CHUNK_SIZE_LIMIT || now - this.startedAt >= CHUNK_AGE_LIMIT)) {
@@ -224,6 +243,13 @@ export default class InputRing {
     drainRing(): InputChunk[] {
         const chunks = this.chunks;
         this.chunks = [];
+
+        // whatever was dropped is dropped from a dump that has now been handed
+        // over; the next chunk to begin is the first of something new, and
+        // marking it "chunks older than this were discarded" would be a claim
+        // about a record nobody is going to read next to it
+        this.wrapped = false;
+
         return chunks;
     }
 
@@ -278,6 +304,11 @@ export default class InputRing {
             return;
         }
 
+        // defensive: EVENT_MOUSE_MOVE is a var-byte prot, so the wire itself
+        // cannot deliver more than 255 bytes and this cannot fire today. It
+        // stays because the record's length field is what makes 255 the limit,
+        // and a prot widened to var-short later would silently truncate here
+        // instead of leaving a marker where the gap is.
         if (data.length > MOVE_PAYLOAD_LIMIT) {
             this.mark(tick, now, InputMarker.MOVE_PACKET_DROPPED);
             return;
@@ -301,19 +332,6 @@ export default class InputRing {
         this.prepare(tick, now, 2);
         this.p1(InputRecord.MARKER);
         this.p1(reason);
-    }
-
-    /**
-     * The tail's own clock ran out. The part chunk is sealed as live - it was
-     * captured while the tail was still running - and only then does the ring
-     * take over again.
-     */
-    private untrackExpired(now: number): void {
-        if (this.pos > 0) {
-            this.seal(now, true);
-        }
-
-        this.until = 0;
     }
 
     private rotate(now: number): void {

@@ -233,13 +233,13 @@ function buildContract(): { chunk: InputChunk; primed: InputChunk[] } {
     const rotated: InputChunk[] = [];
     const ring = new InputRing(chunk => rotated.push(chunk));
 
-    // seventeen one-record chunks, each sealed by the 60s age limit
+    // seventeen one-record chunks, each sealed by the 60s age limit. They are
+    // not drained here: a drain hands the dump over and clears the wrap flag
+    // with it, and the contract chunk is meant to open with marker 3.
     for (let i = 0; i <= RING_CAPACITY; i++) {
         ring.appletFocus(i * 100, START + i * CHUNK_AGE_LIMIT, 1);
         ring.onCycle(START + (i + 1) * CHUNK_AGE_LIMIT);
     }
-
-    const primed = ring.drainRing();
 
     const at = (tick: number) => CHUNK_START + tick * 600;
     const client = new ReferenceClient();
@@ -304,9 +304,11 @@ function buildContract(): { chunk: InputChunk; primed: InputChunk[] } {
     ring.onCycle(at(0) + CHUNK_AGE_LIMIT);
 
     const chunks = ring.drainRing();
-    assert.equal(chunks.length, 1, 'the contract is one chunk');
+    const chunk = chunks[chunks.length - 1];
 
-    return { chunk: chunks[0], primed };
+    assert.equal(chunk.seq, RING_CAPACITY + 1, 'the contract chunk is the eighteenth written');
+
+    return { chunk, primed: chunks.slice(0, -1) };
 }
 
 // ---------------------------------------------------------------------------
@@ -448,8 +450,8 @@ test('the ring keeps sixteen chunks and says so when it drops one', () => {
         assert.ok(ring.size <= RING_CAPACITY);
     };
 
-    // seventeen chunks written, sixteen kept
-    for (let i = 0; i <= RING_CAPACITY; i++) {
+    // eighteen chunks written, sixteen kept
+    for (let i = 0; i <= RING_CAPACITY + 1; i++) {
         seal(i);
     }
 
@@ -457,18 +459,24 @@ test('the ring keeps sixteen chunks and says so when it drops one', () => {
     assert.equal(chunks.length, RING_CAPACITY);
     assert.deepEqual(
         chunks.map(chunk => chunk.seq),
-        chunks.map((_, i) => i + 1)
+        chunks.map((_, i) => i + 2)
     );
 
-    // none of them carries the marker: the drop happened as the last of them
-    // was filed, so the hole is in front of whatever comes next
-    for (const chunk of chunks) {
+    // the first chunk begun after a drop says so, and the ones written while
+    // there was still room do not
+    const wrapped = chunks[chunks.length - 1];
+    assert.equal(wrapped.seq, RING_CAPACITY + 1);
+    assert.deepEqual([...wrapped.bytes.slice(0, 2)], [InputRecord.MARKER, InputMarker.RING_WRAPPED]);
+
+    for (const chunk of chunks.slice(0, -1)) {
         assert.equal(chunk.bytes[0], InputRecord.TIME_ANCHOR, `chunk ${chunk.seq}`);
     }
 
-    seal(RING_CAPACITY + 1);
+    // and the drain hands that dump over: the next chunk is the first of
+    // something new, not a second claim about a record nobody will see again
+    seal(RING_CAPACITY + 2);
     const [next] = ring.drainRing();
-    assert.deepEqual([...next.bytes.slice(0, 2)], [InputRecord.MARKER, InputMarker.RING_WRAPPED]);
+    assert.equal(next.bytes[0], InputRecord.TIME_ANCHOR);
 });
 
 // ---------------------------------------------------------------------------
@@ -586,6 +594,48 @@ test('flush seals the chunk in flight without opening a tail', () => {
     assert.equal(ring.size, 0);
 });
 
+test('extend moves the end of a running tail and never shortens it', () => {
+    const live: InputChunk[] = [];
+    const ring = new InputRing(chunk => live.push(chunk));
+
+    ring.track(START + 60_000, 0, START);
+    ring.appletFocus(1, START + 600, 1);
+    const inFlight = ring.pending;
+
+    ring.extend(START + 900_000);
+    assert.equal(ring.activeUntil, START + 900_000);
+
+    // a one-minute second report cannot cut a fifteen-minute one short
+    ring.extend(START + 30_000);
+    assert.equal(ring.activeUntil, START + 900_000);
+
+    // and it leaves the chunk in flight alone: no seal, no second marker 4
+    assert.equal(live.length, 0);
+    assert.equal(ring.pending, inFlight);
+
+    // nothing to extend when nothing is tracked
+    ring.untrack(START + 1200);
+    ring.extend(START + 900_000);
+    assert.equal(ring.activeUntil, 0);
+});
+
+test('untrack seals as live even after the window has already lapsed', () => {
+    const live: InputChunk[] = [];
+    const ring = new InputRing(chunk => live.push(chunk));
+
+    ring.track(START + 10_000, 0, START);
+    ring.appletFocus(1, START + 600, 1);
+
+    // past `until`, but onCycle has not run to sweep it: this chunk was still
+    // captured under the tail and belongs to the report, not to the ring
+    assert.equal(ring.isTracked(START + 11_000), false);
+    ring.untrack(START + 11_000);
+
+    assert.equal(live.length, 1);
+    assert.equal(ring.size, 0, 'not filed into the ring, where it would be dropped');
+    assert.equal(live[0].flushedAt, START + 11_000);
+});
+
 test('untrack submits what the tail had, and clear throws everything away', () => {
     const live: InputChunk[] = [];
     const ring = new InputRing(chunk => live.push(chunk));
@@ -614,7 +664,7 @@ test('untrack submits what the tail had, and clear throws everything away', () =
 test('the contract fixture is the chunk this ring writes', () => {
     const { chunk, primed } = buildContract();
 
-    assert.equal(primed.length, RING_CAPACITY, 'the ring dropped the seventeenth chunk before the contract one');
+    assert.equal(primed.length, RING_CAPACITY - 1, 'two of the priming chunks were dropped to make room');
     assert.equal(chunk.seq, fixture.chunk.seq);
     assert.equal(chunk.startedAt, fixture.chunk.started_at);
     assert.equal(chunk.flushedAt, fixture.chunk.flushed_at);
