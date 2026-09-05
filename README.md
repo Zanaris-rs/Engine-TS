@@ -271,6 +271,56 @@ The logger binds `0.0.0.0`, exactly as the login and friend servers do, and is
 kept private by the security group rather than by the bind address; worlds on
 other hosts reach it over the fleet's WireGuard link. Do not expose 43501.
 
+### Economy census
+
+The other half of the public record is what exists in the game.
+
+```sh
+npm run economy                 # census this profile, write a snapshot
+npm run economy -- --dry-run    # count and print, write nothing, open no database
+```
+
+It reads every `data/players/<profile>/*.sav` with a standalone save reader
+(`tools/server/SaveReader.ts` - `PlayerLoading` would import `World`, which
+spawns worker threads to read a few kilobytes), sums every item id across the
+**permanent** inventories, and writes one `economy_snapshot`: the player count,
+coins, the whole census as `{item_id: count}`, and the tracked subset beside it.
+On the hub a systemd timer runs it hourly. Nothing it writes names an account -
+it never knew one - which is what lets `/economy` say a partyhat entered the
+game.
+
+**What counts is what is in a save file.** Backpack, worn and bank, of every
+account that has ever logged out. So:
+
+- **Shop stock does not count.** Shop invs are temp scope, rebuilt from the
+  config at startup, and belong to nobody.
+- **Ground items do not count.** Neither do items in a trade window, a duel
+  stake or any other temp inv: they are mid-flight, and the save is where things
+  come to rest.
+- **An online player counts as of their last save**, which is at most 15 minutes
+  old. A census taken more often than the autosave would say the same thing
+  twice.
+- **An account that never logs out again still counts.** Its save is still
+  there, so its items still exist by this definition.
+
+`economy_flow` is the change: one signed row per tracked item whose count moved
+since the previous snapshot, positive entered the game and negative left it. The
+first census for a profile writes none - there is nothing to compare it to - and
+neither does an item only just added to the tracked list, until the run after
+the one that first counts it.
+
+That list is `data/config/economy.json`, committed with the engine and edited by
+hand: the partyhats, h'ween masks, santa hat, cracker, disk of returning, half
+full wine jug, pumpkin and easter egg. Everything else is still counted in
+`items`; the list is only what gets a line of its own on the site and a flow row
+of its own here. A fleet that wants a different one ships a copy at
+`<cwd>/data/config/economy.json`, which wins over the bundled file; each run
+logs which one it read.
+
+A save that cannot be read **stops the run** rather than being skipped, because
+every item in it would otherwise read as having left the game. Fix or remove the
+file, or pass `--skip-unreadable` once you have looked at it.
+
 ## Dependencies
 
 - [Node.js 24+](https://nodejs.org)
