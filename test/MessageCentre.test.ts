@@ -5,7 +5,7 @@ import test from 'node:test';
 import { DummyDriver, Kysely, PostgresAdapter, PostgresIntrospector, PostgresQueryCompiler, SqliteAdapter, SqliteIntrospector, SqliteQueryCompiler } from 'kysely';
 
 import type { DB } from '#/db/types.js';
-import { MAX_MESSAGE_COUNT, MESSAGE_KINDS, NOTICE_KIND, banNotice, clampMessageCount, formatUntil, muteNotice, noticeActor, recentNoticeQuery, unreadQuery } from '#/server/login/MessageCentre.js';
+import { MAX_MESSAGE_COUNT, MESSAGE_KINDS, NOTICE_KIND, banNotice, clampMessageCount, formatUntil, muteNotice, noticeActor, recentNoticeQuery, rewriteNoticeQuery, unreadQuery } from '#/server/login/MessageCentre.js';
 
 const fixture = JSON.parse(readFileSync(new URL('./fixtures/message-centre-contract.json', import.meta.url), 'utf8')) as {
     unread_sql: string;
@@ -118,6 +118,28 @@ test('the duplicate guard asks for unread notices of one kind since a time', () 
 
     assert.equal(plain(sql), 'select id from account_message where account_id = $1 and kind = $2 and read_at is null and created_at > $3');
     assert.deepEqual(parameters, [7, 'ban', new Date('2026-09-06T12:00:00.000Z')]);
+});
+
+test('the second decision inside the window rewrites the notice, expiry and all', () => {
+    // The bug this replaced: the second ban was skipped, so the player's only
+    // notice named the *first* one's expiry and the moderator who extended it
+    // appeared nowhere.
+    const notice = banNotice('mod_ash', new Date('2026-09-13T14:32:00.000Z'));
+    const { sql, parameters } = rewriteNoticeQuery(postgres, 41, notice, 9, '2026-09-06T14:33:00.000Z').compile();
+
+    assert.equal(plain(sql), 'update account_message set subject = $1, body = $2, created_by_account_id = $3, created_at = $4 where id = $5');
+    assert.deepEqual(parameters, [notice.subject, notice.body, 9, '2026-09-06T14:33:00.000Z', 41]);
+    assert.match(notice.subject, /banned until 2026-09-13 14:32 UTC$/);
+});
+
+test('the rewrite is the same statement on sqlite, and carries no now()', () => {
+    const notice = muteNotice('automated', new Date('2026-09-13T14:32:00.000Z'));
+    // an automated check has no account behind it, so the author goes back to null
+    const { sql, parameters } = rewriteNoticeQuery(sqlite, 41, notice, null, '2026-09-06 14:33:00').compile();
+
+    assert.equal(plain(sql), 'update account_message set subject = ?, body = ?, created_by_account_id = ?, created_at = ? where id = ?');
+    assert.deepEqual(parameters, [notice.subject, notice.body, null, '2026-09-06 14:33:00', 41]);
+    assert.doesNotMatch(sql, /now\(\)|CURRENT_TIMESTAMP|returning/i);
 });
 
 test('until dates are written in UTC, so nobody has to guess the timezone', () => {

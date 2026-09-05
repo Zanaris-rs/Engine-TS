@@ -37,7 +37,7 @@ export const NOTICE_KIND: MessageKind = 'notice';
  */
 export const MAX_MESSAGE_COUNT = 65535;
 
-/** A second ban inside this window reuses the first notice rather than adding one. */
+/** A second ban inside this window rewrites the first notice rather than adding one. */
 export const NOTICE_DUPLICATE_WINDOW_MS = 60 * 60 * 1000;
 
 /**
@@ -93,6 +93,31 @@ export async function countUnread(database: Kysely<DB>, accountId: number): Prom
  */
 export function recentNoticeQuery(database: Kysely<DB>, accountId: number, kind: MessageKind, since: Date) {
     return database.selectFrom('account_message').select('id').where('account_id', '=', accountId).where('kind', '=', kind).where('read_at', 'is', null).where('created_at', '>', since);
+}
+
+/**
+ * The other half of that guard, and the reason it is not a plain `return`.
+ * Skipping the second decision outright left the player holding the *first*
+ * one's expiry: a ban extended from five minutes to a week still read "banned
+ * until <five minutes from the first one>", and the moderator who extended it
+ * was recorded nowhere. So the row they have not opened yet becomes the new
+ * notice - subject, body, author and the time it was written - which is still
+ * one message per decision, but the true one.
+ *
+ * `created_at` is passed in rather than written as `now()`: this compiles for
+ * sqlite and postgres alike, and `toDbDate()` at the call site is what knows
+ * which shape the configured backend stores.
+ */
+export function rewriteNoticeQuery(database: Kysely<DB>, id: number, notice: ModerationNotice, createdByAccountId: number | null, createdAt: string) {
+    return database
+        .updateTable('account_message')
+        .set({
+            subject: notice.subject,
+            body: notice.body,
+            created_by_account_id: createdByAccountId,
+            created_at: createdAt
+        })
+        .where('id', '=', id);
 }
 
 /** `2026-09-06 14:32 UTC` - short enough for a subject line, unambiguous anywhere. */

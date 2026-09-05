@@ -10,7 +10,7 @@ import { PlayerLoading } from '#/engine/entity/PlayerLoading.js';
 import Packet from '#/io/Packet.js';
 import { updateHiscores } from '#/server/login/Hiscores.js';
 import { handleWithFailureReply, retryReply, type ReplyId, type SendReply } from '#/server/login/LoginMessage.js';
-import { banNotice, countUnread, muteNotice, type ModerationNotice, NOTICE_DUPLICATE_WINDOW_MS, recentNoticeQuery } from '#/server/login/MessageCentre.js';
+import { banNotice, countUnread, muteNotice, type ModerationNotice, NOTICE_DUPLICATE_WINDOW_MS, recentNoticeQuery, rewriteNoticeQuery } from '#/server/login/MessageCentre.js';
 import Environment from '#/util/Environment.js';
 import { toSafeName } from '#/util/JString.js';
 import { printInfo } from '#/util/Logger.js';
@@ -46,9 +46,12 @@ async function unreadFor(accountId: number): Promise<number> {
  * what happened and somewhere to appeal - which is what the client's own "check
  * your message-centre" screen has always told them to do.
  *
- * A second ban inside the hour reuses the first notice rather than adding one:
- * a moderator extending a ban, or an automated check firing twice, is one
- * decision, not three messages.
+ * A second ban inside the hour rewrites the first notice rather than adding
+ * one: a moderator extending a ban, or an automated check firing twice, is one
+ * decision, not three messages - but it is the *latest* decision, so the
+ * unread row is overwritten with the new expiry and the new author rather than
+ * left standing. Dropping the second one used to leave the player reading an
+ * expiry that no longer matched `account.banned_until`.
  */
 async function writeModerationNotice(username: string, notice: ModerationNotice, staffUsername: string) {
     try {
@@ -58,13 +61,14 @@ async function writeModerationNotice(username: string, notice: ModerationNotice,
             return;
         }
 
+        const staff = await db.selectFrom('account').select('id').where('username', '=', staffUsername).executeTakeFirst();
+
         const recent = await recentNoticeQuery(db, account.id, notice.kind, new Date(Date.now() - NOTICE_DUPLICATE_WINDOW_MS)).executeTakeFirst();
 
         if (recent) {
+            await rewriteNoticeQuery(db, recent.id, notice, staff?.id ?? null, toDbDate(new Date())).execute();
             return;
         }
-
-        const staff = await db.selectFrom('account').select('id').where('username', '=', staffUsername).executeTakeFirst();
 
         await db
             .insertInto('account_message')
