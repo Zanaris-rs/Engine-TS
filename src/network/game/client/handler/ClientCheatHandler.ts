@@ -29,6 +29,7 @@ import ScriptRunner from '#/engine/script/ScriptRunner.js';
 
 import ClientGameMessageHandler from '#/network/game/client/ClientGameMessageHandler.js';
 import ClientCheat from '#/network/game/client/model/ClientCheat.js';
+import { ReportAbuseReason } from '#/network/game/client/model/ReportAbuse.js';
 
 import { LoggerEventType } from '#/server/logger/LoggerEventType.js';
 
@@ -680,6 +681,42 @@ export default class ClientCheatHandler extends ClientGameMessageHandler<ClientC
                 } else {
                     player.messageGame(`Player '${args[0]}' does not exist or is not logged in.`);
                 }
+            } else if (cmd === 'track') {
+                // custom: watch somebody's mouse without waiting for a player
+                // to report them. Not production-gated like its neighbours -
+                // this is the one command a developer needs on a dev world to
+                // see the capture path work end to end.
+                if (args.length < 1) {
+                    // ::track <username> [minutes]
+                    player.messageGame('Usage: ::track <username> [minutes], 0 to stop');
+                    return false;
+                }
+
+                const username = args[0];
+                const minutes = args.length > 1 ? Math.max(0, tryParseInt(args[1], 15)) : 15;
+
+                if (minutes === 0) {
+                    if (World.stopInputCapture(username)) {
+                        player.messageGame(`No longer tracking '${username}'.`);
+                    } else {
+                        player.messageGame(`Player '${username}' does not exist or is not logged in.`);
+                    }
+
+                    return true;
+                }
+
+                if (!World.getPlayerByUsername(username)) {
+                    // filing the report anyway would leave a row on
+                    // /staff/reports with nothing behind it
+                    player.messageGame(`Player '${username}' does not exist or is not logged in.`);
+                    return false;
+                }
+
+                // through the report path, not around it: the point is that the
+                // evidence turns up on /staff/reports like any other macro
+                // report, with this moderator's name on it as the reporter
+                World.notifyPlayerReport(player, username, ReportAbuseReason.MACROING, minutes * 60 * 1000);
+                player.messageGame(`Tracking '${username}' for ${minutes} minutes.`);
             }
         }
 

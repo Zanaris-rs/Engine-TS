@@ -2099,8 +2099,7 @@ class World {
                         // the stream, and `report_input` is where the stream goes
                         this.captureInput(player.username, player, Date.now(), World.RELAY_TRACK_MS);
                     } else {
-                        this.inputCaptures.delete(player.username);
-                        player.input.untrack();
+                        this.stopInputCapture(player.username);
                     }
                 }
             } else if (opcode === FriendsServerOpcodes.RELAY_RELOAD) {
@@ -2467,6 +2466,24 @@ class World {
         }
 
         return capture.uuid;
+    }
+
+    /**
+     * Stop watching somebody early. The tail submits what it had before it
+     * closes; no `evidence_end` is posted, because a capture stopped by hand
+     * has no after-window worth copying.
+     */
+    stopInputCapture(offender: string): boolean {
+        const player = this.getPlayerByUsername(offender);
+
+        this.inputCaptures.delete(offender);
+
+        if (!player) {
+            return false;
+        }
+
+        player.input.untrack();
+        return true;
     }
 
     /**
