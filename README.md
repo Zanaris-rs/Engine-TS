@@ -150,8 +150,63 @@ that predates the registration columns wants those two statements edited and
 the values back-filled.
 
 The postgres side has no baseline problem: `0_init` was never edited, and the
-later changes are their own migrations, `1_register_caps`,
-`2_website_login` and `3_message_centre`.
+later changes are their own migrations, `1_register_caps`, `2_website_login`,
+`3_message_centre` and `4_evidence_and_records`.
+
+## Reports and evidence
+
+A Report Abuse used to reach a moderator as a row with a reason code and
+nothing behind it. For **macroing** and **bug abuse** it now carries evidence,
+and the piece that makes that possible is that recording is always on.
+
+Every player has an in-memory **input ring**
+(`src/engine/entity/tracking/InputRing.ts`): their mouse movement, clicks,
+camera and window focus, framed into chunks that rotate at 1500 bytes or 60
+seconds. Sixteen chunks are kept - roughly the last ten minutes, at most 24 KB
+a player - and the rest is thrown away. Nothing leaves the world process until
+somebody is reported. This is the fix for the thing that made the old capture
+useless: tracking was switched on *by* the report, so the record began after
+the moment that caused it.
+
+When a macro or bug-abuse report lands (or a moderator types
+`::track <name> [minutes]`), the world generates a uuid and:
+
+- submits the whole ring, oldest chunk first, as the **before** window;
+- runs a 15-minute **live tail**, submitting each chunk as it rotates;
+- has the logger server copy the offender's own chat - what they said out loud
+  and the private messages they sent, never what was said to them - for 30
+  minutes before the report and the length of the tail after it.
+
+One capture per offender per window (six people reporting the same macroer get
+one copy of the evidence, not six) and five live tails per world; past that a
+report still gets the ring and no tail. The framing itself is a cross-repo
+contract, pinned in `test/fixtures/input-tracking-contract.json` and decoded by
+the website.
+
+Chat is swept hourly by the friend server, an hour after it was said. The
+evidence copy is what keeps any of it.
+
+### Running the logger in dev
+
+The evidence goes to the **logger server**, which has to be running or the
+chunks are dropped:
+
+```sh
+npm run logger   # alongside npm run login, npm run friend and npm run dev
+```
+
+Turn it on in `data/config/world.json`:
+
+```json
+"logger": { "enabled": true, "sessionLog": false, "host": "localhost", "port": 43501 }
+```
+
+`logger.sessionLog` is **off by default and should stay off**. It gates the
+"Server check in" session-log row written for every player every 50 ticks -
+about 86,000 rows a day at thirty players, read by nothing. Reports, evidence
+and wealth events are not behind it; only that firehose is. With
+`logger.enabled` false the world creates no logger thread at all and builds no
+batches for it.
 
 ## Dependencies
 
