@@ -105,15 +105,28 @@ against the configured backend, then deletes what it made.
 The registration columns (`email`, `email_normalized`, `registration_group`,
 `signup_agent_hash`, `playable_after`, plus the `signup_attempt` table and its
 indexes), then the `login_attempt` table and the
-`session_profile_account_id_timestamp_idx` index, and then the message centre
+`session_profile_account_id_timestamp_idx` index, then the message centre
 (`account_message`, `ticket`, `ticket_message`, `staff_action`, their indexes,
-and `report.reporter_account_id`/`report.world`), were added to the sqlite
-baseline **in place**, editing `20251229170623_clean` rather than adding a
-migration after it. That is deliberate: `ec2-setup/build.sh` seeds a new host
-from exactly one migration directory, so sqlite has to stay a single file.
-mysql, which has no such constraint, got the additive
-`20260904000000_registration_columns`, `20260905000000_website_login` and
-`20260906000000_message_centre` instead.
+and `report.reporter_account_id`/`report.world`), and then the report evidence
+and records (`report_input`, `report_chat`, `punishment`, `staff_spawn`,
+`economy_snapshot`, `economy_flow` and their indexes, the eight columns
+migration 4 adds to `report` - `uuid`, `offender_account_id`,
+`offender_session_uuid`, `offender_coord`, `resolved_at`, `resolution`,
+`resolved_by_account_id`, `staff_note` - with `report_uuid_idx` and
+`report_offender_account_id_timestamp_idx`, and the retention and evidence
+indexes on `session_wealth`, `public_chat` and `private_chat`), were added to
+the sqlite baseline **in place**, editing `20251229170623_clean` rather than
+adding a migration after it. That is deliberate: `ec2-setup/build.sh` seeds a
+new host from exactly one migration directory, so sqlite has to stay a single
+file. mysql, which has no such constraint, got the additive
+`20260904000000_registration_columns`, `20260905000000_website_login`,
+`20260906000000_message_centre` and `20260908000000_evidence_and_records`
+instead.
+
+Editing it in place is easier than it sounds: the baseline is exactly what
+`prisma migrate diff --from-empty --to-schema-datamodel
+prisma/singleworld/schema.prisma --script` prints, so change the schema and
+redirect that command over the file rather than hand-writing the statements.
 
 The cost is that a `db.sqlite` created before an edit is **silently** left
 behind. prisma 6 records the baseline's checksum but does not compare it on

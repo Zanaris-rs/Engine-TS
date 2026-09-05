@@ -77,8 +77,8 @@ CREATE TABLE `economy_snapshot` (
     `profile` VARCHAR(191) NOT NULL,
     `players` INTEGER NOT NULL,
     `coins` BIGINT NOT NULL,
-    `items` TEXT NOT NULL,
-    `tracked` TEXT NOT NULL,
+    `items` MEDIUMTEXT NOT NULL,
+    `tracked` MEDIUMTEXT NOT NULL,
 
     INDEX `economy_snapshot_profile_taken_at_idx`(`profile`, `taken_at` DESC),
     PRIMARY KEY (`id`)

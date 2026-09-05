@@ -325,9 +325,12 @@ model staff_action {
 // reads these rows. Evidence lives 30 days or until the report is dismissed,
 // whichever comes first.
 //
-// economy_snapshot.items/tracked are jsonb on postgres and Text here: the
-// writer hands the same JSON string to every backend, and a VARCHAR(191) is
-// nowhere near enough for a whole item census.
+// economy_snapshot.items/tracked are jsonb on postgres and MediumText here:
+// the writer hands the same JSON string to every backend, a VARCHAR(191) is
+// nowhere near enough for a whole item census, and neither is a TEXT - the map
+// carries every item id in the game and passes 64 KB long before the item list
+// runs out. MediumText is 16 MB, and session_wealth.account_items next door
+// already had the same problem.
 
 model report_input {
     id Int @id @default(autoincrement())
@@ -423,8 +426,8 @@ model economy_snapshot {
     profile  String
     players  Int
     coins    BigInt
-    items    String   @db.Text
-    tracked  String   @db.Text
+    items    String   @db.MediumText
+    tracked  String   @db.MediumText
 
     @@index([profile, taken_at(sort: Desc)])
 }

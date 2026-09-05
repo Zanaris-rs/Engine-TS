@@ -204,9 +204,20 @@ ALTER TABLE "staff_spawn" ENABLE ROW LEVEL SECURITY;
 ALTER TABLE "economy_snapshot" ENABLE ROW LEVEL SECURITY;
 ALTER TABLE "economy_flow" ENABLE ROW LEVEL SECURITY;
 
+-- `input_report` is 0_init's table and is not the same thing as `report_input`
+-- above. Nothing reads it, nothing has written to it since the logger server
+-- was disabled, and migration 4 neither touches nor replaces it; the names are
+-- an accident of history, so do not reach for the wrong one.
+
 -- === functions (task M4b) ===
 --
 -- The staff and public read functions, the resolve/lift writers, the REVOKE
 -- and GRANT block and the replacement reap() are appended below this line by
--- task M4b. This file is applied once, as a whole, after both halves exist -
--- nothing above has run against any database yet.
+-- task M4b, and after them the commented `-- rollback:` block the plan calls
+-- for - drop the functions, the indexes and the tables this file creates, drop
+-- the columns it adds to report, and restore the previous reap(). Commented,
+-- because a rollback is a decision someone makes at a prompt with the row
+-- counts in front of them, not something a migration runner can take back.
+--
+-- This file is applied once, as a whole, after both halves exist - nothing
+-- above has run against any database yet.

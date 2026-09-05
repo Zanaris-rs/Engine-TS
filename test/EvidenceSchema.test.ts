@@ -17,6 +17,18 @@ function read(path: string): string {
     return readFileSync(new URL(path, import.meta.url), 'utf8');
 }
 
+// One model's fields, and only that model's. Matching against a whole schema
+// finds fields on neighbouring models by accident - `items` is a suffix of
+// session_wealth.account_items, which is a MediumText on mysql and would answer
+// for economy_snapshot.items without ever being the column under test.
+function modelBody(schema: string, model: string): string {
+    const start = schema.indexOf(`\nmodel ${model} {`);
+    assert.notEqual(start, -1, `model ${model}`);
+
+    const body = schema.slice(start);
+    return body.slice(0, body.indexOf('\n}'));
+}
+
 const postgresMigration = read('../prisma/postgres/migrations/4_evidence_and_records/migration.sql');
 const mysqlMigration = read('../prisma/multiworld/migrations/20260908000000_evidence_and_records/migration.sql');
 
@@ -149,8 +161,7 @@ test('all three Prisma schemas declare every new model', () => {
 
 test('all three Prisma schemas declare every new report column and index', () => {
     for (const [name, schema] of Object.entries(schemas)) {
-        const model = schema.slice(schema.indexOf('\nmodel report {'));
-        const body = model.slice(0, model.indexOf('\n}'));
+        const body = modelBody(schema, 'report');
 
         for (const column of REPORT_COLUMNS) {
             assert.ok(new RegExp(`^\\s+${column}\\s`, 'm').test(body), `${name}: report.${column}`);
@@ -170,8 +181,7 @@ test('all three Prisma schemas index the three log tables the sweeps and evidenc
 
     for (const [name, schema] of Object.entries(schemas)) {
         for (const [table, indexes] of expected) {
-            const model = schema.slice(schema.indexOf(`\nmodel ${table} {`));
-            const body = model.slice(0, model.indexOf('\n}'));
+            const body = modelBody(schema, table);
 
             for (const index of indexes) {
                 assert.ok(body.includes(index), `${name}: ${table} ${index}`);
@@ -181,24 +191,30 @@ test('all three Prisma schemas index the three log tables the sweeps and evidenc
 });
 
 test('the json census columns take the shape each backend can actually store', () => {
-    // jsonb on postgres, plain text on the two backends without a json type -
-    // the writer hands all three the same JSON string.
-    assert.ok(/items\s+Json\b/.test(schemas.postgres), 'postgres: items Json');
-    assert.ok(/tracked\s+Json\b/.test(schemas.postgres), 'postgres: tracked Json');
+    // jsonb on postgres, and the widest text column the other two have: the
+    // writer hands all three the same JSON string, and the item map carries
+    // every id in the game, so mysql needs MEDIUMTEXT - a TEXT tops out at
+    // 64 KB and would truncate the census silently.
+    const postgres = modelBody(schemas.postgres, 'economy_snapshot');
+    assert.ok(/^\s+items\s+Json$/m.test(postgres), 'postgres: items Json');
+    assert.ok(/^\s+tracked\s+Json$/m.test(postgres), 'postgres: tracked Json');
     assert.ok(postgresMigration.includes('"items" JSONB NOT NULL'), 'postgres: items JSONB');
     assert.ok(postgresMigration.includes('"tracked" JSONB NOT NULL'), 'postgres: tracked JSONB');
 
-    assert.ok(/items\s+String\s*$/m.test(schemas.singleworld), 'sqlite: items String');
-    assert.ok(/tracked\s+String\s*$/m.test(schemas.singleworld), 'sqlite: tracked String');
+    const singleworld = modelBody(schemas.singleworld, 'economy_snapshot');
+    assert.ok(/^\s+items\s+String$/m.test(singleworld), 'sqlite: items String');
+    assert.ok(/^\s+tracked\s+String$/m.test(singleworld), 'sqlite: tracked String');
 
-    assert.ok(/items\s+String\s+@db\.Text/.test(schemas.multiworld), 'mysql: items @db.Text');
-    assert.ok(/tracked\s+String\s+@db\.Text/.test(schemas.multiworld), 'mysql: tracked @db.Text');
+    const multiworld = modelBody(schemas.multiworld, 'economy_snapshot');
+    assert.ok(/^\s+items\s+String\s+@db\.MediumText$/m.test(multiworld), 'mysql: items @db.MediumText');
+    assert.ok(/^\s+tracked\s+String\s+@db\.MediumText$/m.test(multiworld), 'mysql: tracked @db.MediumText');
+    assert.ok(mysqlMigration.includes('`items` MEDIUMTEXT NOT NULL'), 'mysql: items MEDIUMTEXT');
+    assert.ok(mysqlMigration.includes('`tracked` MEDIUMTEXT NOT NULL'), 'mysql: tracked MEDIUMTEXT');
 });
 
 test('the input evidence is bytes on every backend', () => {
     for (const [name, schema] of Object.entries(schemas)) {
-        const model = schema.slice(schema.indexOf('\nmodel report_input {'));
-        assert.ok(/data\s+Bytes/.test(model.slice(0, model.indexOf('\n}'))), `${name}: report_input.data`);
+        assert.ok(/^\s+data\s+Bytes$/m.test(modelBody(schema, 'report_input')), `${name}: report_input.data`);
     }
 
     assert.ok(postgresMigration.includes('"data" BYTEA NOT NULL'), 'postgres: bytea');
