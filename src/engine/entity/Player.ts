@@ -395,6 +395,13 @@ export default class Player extends PathingEntity {
     socialProtect: boolean = false; // social packet spam protection
     reportAbuseProtect: boolean = false; // social packet spam protection
 
+    // Wall clock of the last abuse report that was actually written.
+    // reportAbuseProtect above only survives one tick - resetEntity clears it -
+    // which made Report Abuse an insert into `report` every 600ms for a client
+    // willing to send it. 0 is "never reported", which is always outside the
+    // window; a relog starts a fresh one, and the hop timer already caps that.
+    lastReportAbuse: number = 0;
+
     lastLoginTime: bigint = 0n;
 
     // info updates
