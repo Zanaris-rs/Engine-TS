@@ -251,6 +251,24 @@ LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $$
     LIMIT 1;
 $$;
 
+-- Which profile `/economy` is about.
+--
+-- One database serves every profile a fleet runs, and a public page that added
+-- a beta world's coins to a live world's would be wrong in a way nobody could
+-- see. This is deliberately a constant in a function granted to nobody, and
+-- deliberately *not* `current_setting('app.public_profile')`: a GUC is settable
+-- for the session by whoever holds the connection, so `website` could have
+-- pointed the public page at any profile it liked by sending one SET before the
+-- read. The point of these functions is that the caller cannot choose what is
+-- public, and a knob the caller can turn is not a smaller version of that - it
+-- is the opposite of it.
+--
+-- Changing it is a migration, which is the right weight for the decision.
+CREATE OR REPLACE FUNCTION accounts.public_profile() RETURNS text
+LANGUAGE sql IMMUTABLE SECURITY DEFINER SET search_path = public, pg_temp AS $$
+    SELECT 'main'::text;
+$$;
+
 -- ---------------------------------------------------------------------------
 -- the reports list, and one report with its evidence
 -- ---------------------------------------------------------------------------
@@ -345,10 +363,19 @@ LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $$
     LEFT JOIN public.session reporter_session ON reporter_session.uuid = r.session_uuid
     -- The session the offender was on: the one the report names, or - when the
     -- world could not name one - their newest login before the report.
+    --
+    -- Both branches insist the session belongs to the offender. The named one
+    -- has to as well: `report.offender_session_uuid` is written by a world that
+    -- guessed, or by the login server's own newest-session lookup, and a uuid
+    -- that turns out to be somebody else's would put a stranger's world on the
+    -- page and - worse - hand their address to same_ip_as_reporter. When the
+    -- offender resolved to no account at all there is nothing to check it
+    -- against, and the named session is taken as it stands.
     LEFT JOIN LATERAL (
         SELECT s.world, s.ip
         FROM public.session s
-        WHERE (r.offender_session_uuid IS NOT NULL AND s.uuid = r.offender_session_uuid)
+        WHERE (r.offender_session_uuid IS NOT NULL AND s.uuid = r.offender_session_uuid
+               AND (offender.id IS NULL OR s.account_id = offender.id))
            OR (r.offender_session_uuid IS NULL AND offender.id IS NOT NULL
                AND s.account_id = offender.id AND s.timestamp <= r.timestamp)
         ORDER BY s.timestamp DESC
@@ -463,7 +490,7 @@ $$;
 CREATE OR REPLACE FUNCTION accounts.staff_report_resolve(p_actor text, p_candidate_hash text,
                                                          p_id int, p_resolution text, p_note text) RETURNS text
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $$
-DECLARE v_actor_id int; v_password text; v_uuid text; v_exists boolean;
+DECLARE v_actor_id int; v_password text; v_uuid text; v_exists boolean; v_note text;
 BEGIN
     IF NOT accounts.is_staff(p_actor) THEN RETURN 'forbidden'; END IF;
 
@@ -482,8 +509,15 @@ BEGIN
         RETURN 'bad_credentials';
     END IF;
 
+    -- Trimmed before it is measured, and the same value that gets stored: the
+    -- cap is on the note, and a paste that arrives with a screenful of
+    -- whitespace on the end is not a longer note. 1000 is STAFF_NOTE_MAX in
+    -- the website's lib/staff/format.ts, which refuses it a moment earlier
+    -- with a message naming the field; this is the authority.
+    v_note := nullif(btrim(coalesce(p_note, '')), '');
+
     IF p_resolution IS NULL OR p_resolution NOT IN ('actioned', 'dismissed', 'watch')
-       OR (p_note IS NOT NULL AND length(p_note) > 1000) THEN
+       OR (v_note IS NOT NULL AND length(v_note) > 1000) THEN
         RETURN 'invalid';
     END IF;
 
@@ -494,7 +528,7 @@ BEGIN
        SET resolved_at = now(),
            resolution = p_resolution,
            resolved_by_account_id = v_actor_id,
-           staff_note = nullif(btrim(coalesce(p_note, '')), '')
+           staff_note = v_note
      WHERE id = p_id;
 
     IF p_resolution = 'dismissed' AND v_uuid IS NOT NULL THEN
@@ -577,17 +611,27 @@ END; $$;
 
 -- 'ok' | 'forbidden' | 'not_found' | 'invalid'.
 --
+-- 'ok' | 'forbidden' | 'rate_limited' | 'not_found' | 'invalid'.
+--
 -- The one-line public explanation on a punishment. No password: it writes a
 -- sentence onto a row that is already public and changes nobody's access to
 -- anything, which is the test every other verb here fails.
 --
+-- It gets staff_notice's hourly cap instead, and for the same reason: no
+-- password means no bad_credentials, so nothing else in this function slows
+-- anybody down, and it writes text onto pages the public reads. Twenty an hour
+-- per moderator, counted off the audit rows this function's own writes leave -
+-- so the limiter and the record of what was limited are the same table, and a
+-- moderator who hits it has twenty notes on /bans to look at.
+--
 -- An empty note clears one. A public note that turns out to name the wrong
 -- person has to be removable by the person who wrote it, and the alternative -
 -- refusing the empty string like staff_notice does - would make psql the only
--- way to take a sentence off a public page.
+-- way to take a sentence off a public page. A clear costs an hour's allowance
+-- like anything else: it is still a public page changing.
 CREATE OR REPLACE FUNCTION accounts.staff_punishment_note(p_actor text, p_id int, p_note text) RETURNS text
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $$
-DECLARE v_actor_id int; v_username text; v_note text;
+DECLARE v_actor_id int; v_username text; v_note text; v_hour int;
 BEGIN
     IF NOT accounts.is_staff(p_actor) THEN RETURN 'forbidden'; END IF;
 
@@ -597,6 +641,14 @@ BEGIN
     IF v_note IS NOT NULL AND length(v_note) > 120 THEN RETURN 'invalid'; END IF;
 
     SELECT a.id INTO v_actor_id FROM public.account a WHERE a.username = p_actor;
+
+    -- The index behind this is 3_message_centre's
+    -- staff_action_actor_account_id_action_created_at_idx, which staff_notice's
+    -- own cap already scans.
+    SELECT count(*) INTO v_hour FROM public.staff_action s
+     WHERE s.actor_account_id = v_actor_id AND s.action = 'staff_punishment_note'
+       AND s.created_at > now() - interval '1 hour';
+    IF v_hour >= 20 THEN RETURN 'rate_limited'; END IF;
 
     SELECT p.username INTO v_username FROM public.punishment p WHERE p.id = p_id;
     IF v_username IS NULL THEN RETURN 'not_found'; END IF;
@@ -628,6 +680,14 @@ END; $$;
 -- The page asks for one row more than it shows to learn whether there is a
 -- next page, so the limit is honoured up to 100 rather than pinned to a page
 -- size this function does not know.
+--
+-- The offset is capped too, at 100 000. An OFFSET is not free - postgres walks
+-- and discards every row it skips - so `/bans/page/500000` from an unsigned-in
+-- reader is a full index scan of a table that only ever grows, once per
+-- request, and ISR caches each distinct page number separately. Five thousand
+-- pages is more of the record than anybody will ever page through by hand;
+-- past that the answer is empty, which is what a page number past the end
+-- should say anyway.
 CREATE OR REPLACE FUNCTION accounts.public_punishments(p_limit int, p_offset int)
 RETURNS TABLE (username text, kind text, issued_at timestamptz, until timestamptz,
                automated boolean, note text, lifted_at timestamptz)
@@ -636,20 +696,14 @@ LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $$
     FROM public.punishment p
     ORDER BY p.issued_at DESC, p.id DESC
     LIMIT least(greatest(coalesce(p_limit, 20), 1), 100)
-    OFFSET greatest(coalesce(p_offset, 0), 0);
+    OFFSET least(greatest(coalesce(p_offset, 0), 0), 100000);
 $$;
 
 -- The census, hourly, for the window the page asks for.
 --
--- One profile: a fleet's database serves every profile it runs, and a public
--- page that added a beta world's coins to a live world's would be wrong in a
--- way nobody could see. `main` is the only profile the fleet runs and the
--- default in world.json; an operator with a second production profile changes
--- it without touching this file, the way 0_init's soak window works:
---
---     ALTER DATABASE postgres SET app.public_profile = 'other';
---
--- Newest first with a ceiling, because the page sorts these into a series
+-- One profile, and the caller does not get to say which: accounts.public_profile()
+-- above is a constant in a function granted to nobody. Newest first with a
+-- ceiling, because the page sorts these into a series
 -- itself and a truncated answer should be missing the oldest hours, not the
 -- ones the totals are read from.
 CREATE OR REPLACE FUNCTION accounts.public_economy(p_days int)
@@ -657,7 +711,7 @@ RETURNS TABLE (taken_at timestamptz, players int, coins bigint, tracked jsonb)
 LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $$
     SELECT es.taken_at, es.players, es.coins, es.tracked
     FROM public.economy_snapshot es
-    WHERE es.profile = coalesce(nullif(current_setting('app.public_profile', true), ''), 'main')
+    WHERE es.profile = accounts.public_profile()
       AND es.taken_at > now() - make_interval(days => least(greatest(coalesce(p_days, 30), 1), 90))
     ORDER BY es.taken_at DESC, es.id DESC
     LIMIT 2400;
@@ -672,7 +726,7 @@ RETURNS TABLE (taken_at timestamptz, item_id int, delta int)
 LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $$
     SELECT ef.taken_at, ef.item_id, ef.delta
     FROM public.economy_flow ef
-    WHERE ef.profile = coalesce(nullif(current_setting('app.public_profile', true), ''), 'main')
+    WHERE ef.profile = accounts.public_profile()
       AND ef.taken_at > now() - make_interval(days => least(greatest(coalesce(p_days, 30), 1), 90))
     ORDER BY ef.taken_at DESC, ef.item_id
     LIMIT 5000;
@@ -755,9 +809,9 @@ END; $$;
 --
 -- SECURITY DEFINER functions are EXECUTE-able by PUBLIC by default, so the
 -- default comes off every one of them before anything is granted.
--- accounts.report_offender is granted to nobody, like is_staff, throttled and
--- record_failure: it is a helper the functions above call while running as the
--- definer, not an API.
+-- accounts.report_offender and accounts.public_profile are granted to nobody,
+-- like is_staff, throttled and record_failure: they are helpers the functions
+-- above call while running as the definer, not an API.
 --
 -- staff_reports and reap are re-granted because they were replaced. reap keeps
 -- its grant across a CREATE OR REPLACE and staff_reports could not be replaced
@@ -765,6 +819,7 @@ END; $$;
 -- grant with it - so both are written out rather than reasoned about.
 
 REVOKE ALL ON FUNCTION accounts.report_offender(int) FROM PUBLIC;
+REVOKE ALL ON FUNCTION accounts.public_profile() FROM PUBLIC;
 REVOKE ALL ON FUNCTION accounts.staff_reports(text, timestamptz) FROM PUBLIC;
 REVOKE ALL ON FUNCTION accounts.staff_report(text, int) FROM PUBLIC;
 REVOKE ALL ON FUNCTION accounts.staff_report_input(text, int) FROM PUBLIC;
@@ -804,7 +859,35 @@ GRANT EXECUTE ON FUNCTION accounts.reap() TO website;
 -- `report_chat`, `staff_spawn`, `economy_snapshot` and `economy_flow`.
 --
 -- Ungranted on purpose, still: is_staff, throttled, record_failure, and now
--- report_offender.
+-- report_offender and public_profile. Six functions in accounts that no role
+-- may call directly, and thirty-two that website may.
+--
+-- Two things a reader of the next migration should know, neither of them fixed
+-- here:
+--
+--   The password buckets share a ceiling. accounts.throttled(bucket, actor) was
+--   written in 3_message_centre with the *actor's bare name* in the ip slot,
+--   because there is no address to pass - the route calls these with the
+--   session's username only. So `notice:bob`, `resolve:bob` and `lift:bob` each
+--   get their own ten-per-fifteen-minutes username limb, but all three record
+--   failures with ip = 'bob' and therefore share one twenty-per-fifteen-minutes
+--   ip limb. Twenty wrong passwords spread across the three verbs locks bob out
+--   of all three. That is inherited and it is not obviously wrong - it is still
+--   bob's own bucket and it still cannot touch his login - but it is not what
+--   the per-verb prefixes look like they promise, and anybody adding a fourth
+--   verb should know they are joining a shared ceiling rather than opening a
+--   new one.
+--
+--   public.session has no index leading with account_id. The only one is
+--   2_website_login's (profile, account_id, timestamp DESC), and staff_report's
+--   offender-session fallback and staff_report_wealth both look a player up
+--   without a profile to pass - `report` does not carry one. One report at a
+--   time on a staff page, so it is cheap today and a sequential scan of
+--   `session` when that table is large. Either an (account_id, timestamp DESC)
+--   index or a profile column on `report` fixes it; both are a later
+--   migration's job, and the second would fix a correctness wrinkle too (an
+--   account with a character on two profiles can have a wealth event from the
+--   wrong one quoted inside the window).
 
 -- ---------------------------------------------------------------------------
 -- rollback
@@ -831,6 +914,7 @@ GRANT EXECUTE ON FUNCTION accounts.reap() TO website;
 -- DROP FUNCTION IF EXISTS accounts.staff_report_input(text, int);
 -- DROP FUNCTION IF EXISTS accounts.staff_report(text, int);
 -- DROP FUNCTION IF EXISTS accounts.report_offender(int);
+-- DROP FUNCTION IF EXISTS accounts.public_profile();
 --
 -- -- 3_message_centre's staff_reports, restored. Dropped first for the same
 -- -- reason it was dropped above: the return type is changing back.

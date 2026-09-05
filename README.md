@@ -191,8 +191,14 @@ and replaces two:
 - **public** (`public_punishments`, `public_economy`, `public_economy_flow`,
   `public_staff_spawns`) — the transparency reads. They select only the public
   columns: no issuing or lifting moderator, no account id, no address, no name
-  on a census or a spawn. The census functions read one profile,
-  `app.public_profile` or `main`.
+  on a census or a spawn. The census functions read one profile — `main`, from
+  `accounts.public_profile()`, a constant granted to nobody. Deliberately not a
+  session setting: a GUC is settable by whoever holds the connection, so
+  `website` could have pointed `/economy` at any profile with one `SET`.
+  Changing it is a migration.
+- **`staff_punishment_note`** is capped at twenty an hour per moderator,
+  counted off its own `staff_action` rows, because it is the one verb here that
+  writes public text without re-typing a password.
 - **`reap()`**, replaced. Same signature, still hourly under pg_cron, and it now
   also takes `session_wealth` older than seven days and the evidence of reports
   older than thirty days or dismissed. **Chat is not in it**: `public_chat` and

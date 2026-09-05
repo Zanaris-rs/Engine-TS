@@ -82,7 +82,10 @@ const API: [string, string][] = [
 ];
 
 /** Defined here, called by the functions above, granted to nobody. */
-const HELPERS: [string, string][] = [['report_offender', 'int']];
+const HELPERS: [string, string][] = [
+    ['report_offender', 'int'],
+    ['public_profile', '']
+];
 
 test('migration 4 defines every function in the plan, and no others', () => {
     assert.deepEqual([...defined.keys()].sort(), [...API.map(([name]) => name), ...HELPERS.map(([name]) => name)].sort());
@@ -165,6 +168,24 @@ test("the two verbs that re-type a password use staff_notice's compare-and-set",
     assert.ok(defined.get('staff_punishment_note')!.body.includes('INSERT INTO public.staff_action'), 'staff_punishment_note: audited');
 });
 
+test("the note verb takes no password, so it takes staff_notice's hourly cap instead", () => {
+    const { body } = defined.get('staff_punishment_note')!;
+
+    // Nothing else in this function slows anybody down - no password means no
+    // bad_credentials and no throttle bucket - and it writes a sentence onto a
+    // page anybody can read. Twenty an hour, counted off its own audit rows, so
+    // the limiter and the record of what it limited are one table.
+    assert.ok(body.includes("s.action = 'staff_punishment_note'"), 'counted off its own audit rows');
+    assert.ok(body.includes("s.created_at > now() - interval '1 hour'"), 'per hour');
+    assert.ok(body.includes("IF v_hour >= 20 THEN RETURN 'rate_limited'; END IF;"), 'twenty, then rate_limited');
+
+    // The cap is the actor's, so it needs the actor id, so it must come after
+    // the lookup and before the punishment is found - a rate-limited call must
+    // not leak whether an id exists.
+    assert.ok(body.indexOf('v_hour >= 20') > body.indexOf('INTO v_actor_id'), 'after the actor lookup');
+    assert.ok(body.indexOf('v_hour >= 20') < body.indexOf("RETURN 'not_found'"), 'before the punishment lookup');
+});
+
 test('dismissing a report deletes its evidence in the same statement', () => {
     const { body } = defined.get('staff_report_resolve')!;
 
@@ -219,6 +240,41 @@ test('the reaper keeps wealth seven days and evidence thirty, and never touches 
     }
 });
 
+test('both notes are measured after trimming, on the value that gets stored', () => {
+    const resolve = defined.get('staff_report_resolve')!.body;
+
+    // A paste that arrives with a screenful of whitespace on the end is not a
+    // longer note, and the length that is refused has to be the length that
+    // would have been kept.
+    assert.ok(resolve.includes("v_note := nullif(btrim(coalesce(p_note, '')), '');"), 'resolve trims first');
+    assert.ok(resolve.includes('length(v_note) > 1000'), 'resolve measures the trimmed note');
+    assert.ok(!resolve.includes('length(p_note)'), 'resolve never measures the raw argument');
+    assert.ok(resolve.includes('staff_note = v_note'), 'and stores what it measured');
+
+    for (const name of ['staff_lift', 'staff_punishment_note']) {
+        const body = defined.get(name)!.body;
+
+        assert.ok(body.includes('length(v_note) > 120'), `${name}: the public cap, trimmed`);
+        assert.ok(!body.includes('length(p_note)'), `${name}: never measures the raw argument`);
+    }
+});
+
+test('the offender session on a report has to belong to the offender', () => {
+    const { body } = defined.get('staff_report')!;
+
+    // report.offender_session_uuid is written by a world that guessed, or by
+    // the login server's newest-session lookup. A uuid that turns out to be
+    // somebody else's would put a stranger's world on the page and hand their
+    // address to same_ip_as_reporter, which is the one thing this function
+    // exists to be careful with.
+    assert.ok(/s\.uuid = r\.offender_session_uuid\s+AND \(offender\.id IS NULL OR s\.account_id = offender\.id\)/.test(body), 'the named session is checked against the offender');
+    // Both branches of the LATERAL, and it is the same test in each: the
+    // third occurrence in this function is offender_logins_24h, which counts
+    // the offender's own logins and always did.
+    const lateral = body.slice(body.indexOf('LEFT JOIN LATERAL'), body.indexOf(') offender_session ON true'));
+    assert.equal(lateral.match(/s\.account_id = offender\.id/g)?.length, 2, 'both branches check it');
+});
+
 test('the staff wealth search never claims more than the seven days the rows live', () => {
     const { body } = defined.get('staff_wealth')!;
 
@@ -267,18 +323,35 @@ test('the public record is newest first, and honours a limit up to a hundred', (
     // /bans asks for its page size plus one to learn whether there is a next
     // page, so the limit is the caller's up to a ceiling, not a fixed page.
     assert.ok(punishments.includes('LIMIT least(greatest(coalesce(p_limit, 20), 1), 100)'), 'up to 100');
-    assert.ok(punishments.includes('OFFSET greatest(coalesce(p_offset, 0), 0)'), 'paged');
+    // Both ends clamped. An OFFSET is not free - postgres walks and discards
+    // every row it skips - and /bans is unauthenticated, so `?page=500000`
+    // would be a full index scan of a growing table, once per distinct page
+    // number, cached separately by ISR.
+    assert.ok(punishments.includes('OFFSET least(greatest(coalesce(p_offset, 0), 0), 100000)'), 'paged, and the offset is capped');
 
     assert.ok(defined.get('public_staff_spawns')!.body.includes('ORDER BY ss.created_at DESC, ss.id DESC'), 'spawns newest first');
 });
 
-test('the census functions read one profile and a bounded window', () => {
+test('the census functions read one profile, and the caller cannot choose it', () => {
     for (const name of ['public_economy', 'public_economy_flow']) {
         const { body } = defined.get(name)!;
 
-        assert.ok(body.includes("current_setting('app.public_profile', true), ''), 'main')"), `${name}: one profile`);
+        assert.ok(body.includes('profile = accounts.public_profile()'), `${name}: one profile`);
         assert.ok(body.includes('least(greatest(coalesce(p_days, 30), 1), 90)'), `${name}: bounded window`);
     }
+
+    // Deliberately not current_setting('app.public_profile'): a GUC is settable
+    // for the session by whoever holds the connection, so `website` could point
+    // the public page at any profile it liked by sending one SET first. The
+    // whole point of these functions is that the caller does not choose what is
+    // public, and a knob the caller can turn is the opposite of that.
+    // The phrase survives in the comment on public_profile(), which is where
+    // the reasoning lives; what must not survive is a call in a body.
+    for (const [name, { body }] of defined) {
+        assert.ok(!body.includes('current_setting'), `${name} reads no session setting`);
+    }
+    assert.ok(defined.get('public_profile')!.body.includes("SELECT 'main'::text;"), 'a constant');
+    assert.ok(!live.includes('GRANT EXECUTE ON FUNCTION accounts.public_profile'), 'granted to nobody');
 });
 
 test('the rollback block is commented, and undoes exactly what the file did', () => {
