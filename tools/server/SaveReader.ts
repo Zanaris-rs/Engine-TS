@@ -37,7 +37,7 @@ export type InvLookup = (type: number) => InvMeta | undefined;
 export interface SaveContents {
     username: string;
     version: number;
-    /** Permanent-scope inventories only, by inv type id, in save-file order. */
+    /** Permanent-scope inventories only, by inv type id, each in slot order. */
     inventories: Record<number, SaveObj[]>;
 }
 
@@ -80,11 +80,16 @@ export function fallbackInvLookup(): InvLookup {
  */
 export function readSave(username: string, data: Uint8Array, invs: InvLookup): SaveContents {
     const sav = new Packet(data);
-    const inventories: Record<number, SaveObj[]> = {};
+
+    // by inv type, then by slot: an inv type listed twice sets its slots into
+    // the same inv, exactly as PlayerLoading's `inv.set(slot, obj)` does. The
+    // later block wins the slots it occupies and leaves the rest alone; it does
+    // not add a second copy of the inventory to the census.
+    const permanent = new Map<number, Map<number, SaveObj>>();
 
     // a brand new account is saved as an empty file, and owns nothing
     if (sav.data.length < 2) {
-        return { username, version: 0, inventories };
+        return { username, version: 0, inventories: {} };
     }
 
     if (sav.g2() !== SAV_MAGIC) {
@@ -141,11 +146,17 @@ export function readSave(username: string, data: Uint8Array, invs: InvLookup): S
 
         const size = version >= 5 ? sav.g2() : meta!.size;
 
-        const objs: SaveObj[] = [];
+        // the whole block is read either way: skipping it would mean skipping
+        // the bytes of every inv after it too
+        const keep = meta?.scope === SCOPE_PERM;
+        const slots = keep ? (permanent.get(type) ?? new Map<number, SaveObj>()) : null;
+
         for (let slot = 0; slot < size; slot++) {
             const id = sav.g2() - 1;
             if (id === -1) {
-                // an empty slot is the id alone: no count follows
+                // an empty slot is the id alone: no count follows. It does not
+                // clear a slot an earlier block of the same inv filled, which
+                // is again what PlayerLoading does
                 continue;
             }
 
@@ -154,21 +165,20 @@ export function readSave(username: string, data: Uint8Array, invs: InvLookup): S
                 count = sav.g4s();
             }
 
-            objs.push({ id, count });
+            slots?.set(slot, { id, count });
         }
 
-        if (meta?.scope !== SCOPE_PERM) {
-            // temp and shared invs are not anybody's property: shop stock and
-            // the like are rebuilt from the config every startup
-            continue;
+        if (slots) {
+            // shared and temp invs are not anybody's property: shop stock is
+            // rebuilt from the config every startup, and a trade offer is
+            // mid-flight
+            permanent.set(type, slots);
         }
+    }
 
-        const existing = inventories[type];
-        if (existing) {
-            existing.push(...objs);
-        } else {
-            inventories[type] = objs;
-        }
+    const inventories: Record<number, SaveObj[]> = {};
+    for (const [type, slots] of permanent) {
+        inventories[type] = [...slots.entries()].sort(([a], [b]) => a - b).map(([, obj]) => obj);
     }
 
     return { username, version, inventories };

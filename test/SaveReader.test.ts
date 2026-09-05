@@ -204,6 +204,29 @@ test('takes inv sizes from the config below version 5, and from the file above i
     }
 });
 
+test('an inv listed twice overwrites, slot by slot, rather than being counted twice', () => {
+    // what PlayerLoading does with two blocks of one inv: `inv.set(slot, obj)`
+    // for each, so the later block wins the slots it occupies and leaves the
+    // rest of the inventory alone. Counting both blocks would invent items.
+    const save = buildSave(
+        7,
+        [
+            {
+                type: INV,
+                size: 3,
+                objs: [{ id: 995, count: 5 }, null, { id: 1038, count: 1 }]
+            },
+            { type: INV, size: 3, objs: [{ id: 995, count: 9 }, null, null] }
+        ],
+        {}
+    );
+
+    assert.deepEqual(readSave('d', save, packInvs).inventories[INV], [
+        { id: 995, count: 9 },
+        { id: 1038, count: 1 }
+    ]);
+});
+
 test('refuses to guess an inv size in a save too old to record one', () => {
     const save = buildSave(4, [{ type: INV, size: 3, objs: [{ id: 995, count: 1 }, null, null] }], {});
 
