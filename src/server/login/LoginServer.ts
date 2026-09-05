@@ -325,10 +325,11 @@ export default class LoginServer {
                                 })
                                 .execute();
 
-                            // past every reply that is not a real login, so a
-                            // rejected attempt never pays for the query
-                            const messageCount = await unreadFor(account.id);
-
+                            // The unread count is fetched on the two paths that
+                            // actually answer with one, and nowhere else: every
+                            // reply above returns before it, and so do the two
+                            // save-file rejections below, so no attempt that
+                            // ends in "please try again" pays for the query.
                             if (!fs.existsSync(`data/players/${profile}/${username}.sav`)) {
                                 // not an error - never logged in before
                                 // ^ Only not an error if the user has never logged in before:
@@ -337,6 +338,8 @@ export default class LoginServer {
                                     this.rejectLoginForSafety(sendReply, replyTo);
                                     return;
                                 } else {
+                                    const messageCount = await unreadFor(account.id);
+
                                     sendReply({
                                         replyTo,
                                         response: 4,
@@ -358,6 +361,9 @@ export default class LoginServer {
                                     this.rejectLoginForSafety(sendReply, replyTo);
                                     return;
                                 }
+
+                                const messageCount = await unreadFor(account.id);
+
                                 sendReply({
                                     replyTo,
                                     response: 0,
