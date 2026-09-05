@@ -353,6 +353,9 @@ export default class ClientCheatHandler extends ClientGameMessageHandler<ClientC
 
                 const count = Math.max(1, Math.min(tryParseInt(args[1], 1), 0x7fffffff));
                 player.invAdd(InvType.INV, obj, count);
+                // after the add, not before: an item that failed to enter an
+                // inventory is not one the economy page should be told about
+                World.notifyStaffSpawn(player, player, obj, count);
             } else if (cmd === 'giveother' && Environment.node.production) {
                 // custom
                 if (args.length < 2) {
@@ -373,6 +376,7 @@ export default class ClientCheatHandler extends ClientGameMessageHandler<ClientC
 
                 const count = Math.max(1, Math.min(tryParseInt(args[2], 1), 0x7fffffff));
                 other.invAdd(InvType.INV, obj, count);
+                World.notifyStaffSpawn(player, other, obj, count);
             } else if (cmd === 'givecrap') {
                 // authentic (we don't know the exact specifics of this...)
 
@@ -388,6 +392,8 @@ export default class ClientCheatHandler extends ClientGameMessageHandler<ClientC
                     }
 
                     player.invAdd(InvType.INV, random, 1);
+                    // 28 messages, because 28 different items entered the game
+                    World.notifyStaffSpawn(player, player, random, 1);
                 }
             } else if (cmd === 'givemany') {
                 // authentic
@@ -403,6 +409,7 @@ export default class ClientCheatHandler extends ClientGameMessageHandler<ClientC
                 }
 
                 player.invAdd(InvType.INV, obj, 1000);
+                World.notifyStaffSpawn(player, player, obj, 1000);
             } else if (cmd === 'broadcast' && Environment.node.production) {
                 // custom
                 if (args.length < 0) {

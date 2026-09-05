@@ -1,7 +1,7 @@
 import InternalClient from '#/server/InternalClient.js';
 import Environment from '#/util/Environment.js';
 
-import { type PlayerReportRequest } from './index.d.js';
+import { type PlayerReportRequest, type PlayerSpawnRequest } from './index.d.js';
 
 export class LoginClient extends InternalClient {
     private nodeId = 0;
@@ -179,6 +179,29 @@ export class LoginClient extends InternalClient {
                 nodeTime: Date.now(),
                 profile: Environment.node.profile,
                 ...report
+            })
+        );
+    }
+
+    /**
+     * A staff member conjured an item. Fire and forget: the item is already in
+     * somebody's inventory, and the public spawn log is not worth blocking a
+     * game tick on either.
+     */
+    public async playerSpawn(spawn: Omit<PlayerSpawnRequest, 'type'>) {
+        await this.connect();
+
+        if (!this.ws || !this.wsr || !this.wsr.checkIfWsLive()) {
+            return;
+        }
+
+        this.ws.send(
+            JSON.stringify({
+                type: 'player_spawn',
+                nodeId: this.nodeId,
+                nodeTime: Date.now(),
+                profile: Environment.node.profile,
+                ...spawn
             })
         );
     }

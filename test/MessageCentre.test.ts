@@ -22,6 +22,7 @@ import {
     punishmentsQuery,
     recentNoticeQuery,
     rewriteNoticeQuery,
+    staffSpawnInsertQuery,
     unreadQuery
 } from '#/server/login/MessageCentre.js';
 
@@ -271,6 +272,38 @@ test('lifting only touches punishments that are still in force', () => {
     // would have the public page crediting a moderator with the calendar
     assert.equal(plain(sql), 'update punishment set lifted_at = $1, lifted_by_account_id = $2 where account_id = $3 and lifted_at is null and (until is null or until > $4)');
     assert.deepEqual(parameters, ['2026-09-06T14:33:00.000Z', 9, 7, now]);
+});
+
+test('a spawn names the staff member, the recipient and the world', () => {
+    const columns = 'insert into staff_spawn (staff_account_id, target_account_id, item_id, count, world, created_at)';
+
+    // ::giveother - the recipient is somebody else
+    const other = staffSpawnInsertQuery(postgres, {
+        staffAccountId: 9,
+        targetAccountId: 7,
+        itemId: 995,
+        count: 1000,
+        world: 1,
+        createdAt: '2026-09-06T14:33:00.000Z'
+    }).compile();
+
+    assert.equal(plain(other.sql), `${columns} values ($1, $2, $3, $4, $5, $6)`);
+    assert.deepEqual(other.parameters, [9, 7, 995, 1000, 1, '2026-09-06T14:33:00.000Z']);
+
+    // ::give - the staff member is their own recipient, and the row says so
+    // rather than leaving the column null
+    const self = staffSpawnInsertQuery(sqlite, {
+        staffAccountId: 9,
+        targetAccountId: 9,
+        itemId: 1042,
+        count: 1,
+        world: 1,
+        createdAt: '2026-09-06 14:33:00'
+    }).compile();
+
+    assert.equal(plain(self.sql), `${columns} values (?, ?, ?, ?, ?, ?)`);
+    assert.deepEqual(self.parameters, [9, 9, 1042, 1, 1, '2026-09-06 14:33:00']);
+    assert.doesNotMatch(self.sql, /now\(\)|CURRENT_TIMESTAMP|returning/i);
 });
 
 test('the lift is the same statement on sqlite, and lifted by nobody is null', () => {

@@ -10,7 +10,19 @@ import { PlayerLoading } from '#/engine/entity/PlayerLoading.js';
 import Packet from '#/io/Packet.js';
 import { updateHiscores } from '#/server/login/Hiscores.js';
 import { handleWithFailureReply, retryReply, type ReplyId, type SendReply } from '#/server/login/LoginMessage.js';
-import { banNotice, countUnread, isAutomatedActor, muteNotice, type ModerationNotice, NOTICE_DUPLICATE_WINDOW_MS, type PunishmentKind, punishmentInsertQuery, recentNoticeQuery, rewriteNoticeQuery } from '#/server/login/MessageCentre.js';
+import {
+    banNotice,
+    countUnread,
+    isAutomatedActor,
+    muteNotice,
+    type ModerationNotice,
+    NOTICE_DUPLICATE_WINDOW_MS,
+    type PunishmentKind,
+    punishmentInsertQuery,
+    recentNoticeQuery,
+    rewriteNoticeQuery,
+    staffSpawnInsertQuery
+} from '#/server/login/MessageCentre.js';
 import Environment from '#/util/Environment.js';
 import { toSafeName } from '#/util/JString.js';
 import { printInfo } from '#/util/Logger.js';
@@ -626,6 +638,22 @@ export default class LoginServer {
                                 offender_coord: typeof offender_coord === 'number' ? offender_coord : null
                             })
                             .execute();
+                    } else if (type === 'player_spawn') {
+                        // Every item-creating cheat on a production world, so
+                        // the economy page can account for what a moderator
+                        // added alongside what players mined and killed for.
+                        const { staff_account_id, target_account_id, item_id, count, world } = msg;
+
+                        await staffSpawnInsertQuery(db, {
+                            staffAccountId: staff_account_id,
+                            targetAccountId: typeof target_account_id === 'number' && target_account_id > 0 ? target_account_id : null,
+                            itemId: item_id,
+                            count,
+                            // the world names itself in the message; nodeId is
+                            // the same number off the connection it arrived on
+                            world: typeof world === 'number' ? world : nodeId,
+                            createdAt: toDbDate(nodeTime ?? Date.now())
+                        }).execute();
                     }
                 });
             });

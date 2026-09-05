@@ -263,3 +263,33 @@ export function liftPunishmentsQuery(database: Kysely<DB>, accountId: number, li
         .where('lifted_at', 'is', null)
         .where(eb => eb.or([eb('until', 'is', null), eb('until', '>', now)]));
 }
+
+/**
+ * Every item a staff member conjured on a production world, so the economy
+ * page can say what entered the game without saying who is holding it. The
+ * recipient is the staff member themselves for `::give`, `::givecrap` and
+ * `::givemany`, and somebody else for `::giveother`.
+ *
+ * `created_at` is written rather than defaulted, like every other timestamp
+ * the login server writes: the value is the world's clock at the moment of the
+ * spawn, not the database's at the moment of the insert.
+ */
+export type StaffSpawnRecord = {
+    staffAccountId: number;
+    targetAccountId: number | null;
+    itemId: number;
+    count: number;
+    world: number;
+    createdAt: string;
+};
+
+export function staffSpawnInsertQuery(database: Kysely<DB>, record: StaffSpawnRecord) {
+    return database.insertInto('staff_spawn').values({
+        staff_account_id: record.staffAccountId,
+        target_account_id: record.targetAccountId,
+        item_id: record.itemId,
+        count: record.count,
+        world: record.world,
+        created_at: record.createdAt
+    });
+}

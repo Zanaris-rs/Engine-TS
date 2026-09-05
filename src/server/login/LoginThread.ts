@@ -209,6 +209,15 @@ async function handleRequests(parentPort: ParentPort, msg: any) {
             }
             break;
         }
+        case 'player_spawn': {
+            if (Environment.login.enabled) {
+                // fire and forget: the item already exists, and the world is
+                // not waiting to hear that the log caught up
+                const { staff_account_id, target_account_id, item_id, count, world } = msg;
+                await client.playerSpawn({ staff_account_id, target_account_id, item_id, count, world });
+            }
+            break;
+        }
         case 'world_heartbeat': {
             break;
         }

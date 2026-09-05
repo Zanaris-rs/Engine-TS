@@ -48,6 +48,31 @@ export interface PlayerReportRequest {
     offender_coord: number | null;
 }
 
+/**
+ * An item a staff member conjured, on its way from the world to the login
+ * server, which owns the `staff_spawn` table.
+ *
+ * Every cheat in `ClientCheatHandler` that adds an item to an inventory sends
+ * one - `::give`, `::giveother`, `::givecrap` and `::givemany` - and only on a
+ * production world, where the spawn is a fact about the live economy rather
+ * than a developer's afternoon. `::givecrap` sends 28, one per item, because
+ * that is 28 different items entering the game.
+ *
+ * `target_account_id` is the recipient: the staff member themselves for
+ * everything but `::giveother`, and null only when the recipient has no
+ * account behind them, which cannot happen on a world with the login server
+ * enabled. `world` is the world's own id, so a row is attributable without
+ * reading the connection it arrived on.
+ */
+export interface PlayerSpawnRequest {
+    type: 'player_spawn';
+    staff_account_id: number;
+    target_account_id: number | null;
+    item_id: number;
+    count: number;
+    world: number;
+}
+
 export type GenericLoginThreadResponse = LoginResponse | LogoutResponse;
 
 export function isPlayerLoginResponse(response: LoginResponse | LogoutResponse): response is LoginResponse {

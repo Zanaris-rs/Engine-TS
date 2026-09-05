@@ -2383,6 +2383,35 @@ class World {
     }
 
     /**
+     * An item a staff member conjured out of nothing, on its way to the public
+     * spawn log.
+     *
+     * Only on a production world: a developer filling their own inventory on a
+     * dev box is not a fact about the live economy, and `/economy` would be
+     * unreadable if it were. `::give`, `::givecrap` and `::givemany` name the
+     * staff member as their own recipient; `::giveother` names somebody else.
+     *
+     * An account id of 0 or less means the world never got one from the login
+     * server, and `staff_spawn.staff_account_id` is the one column that cannot
+     * be null - so there is nothing to attribute the row to and it is dropped
+     * rather than written against a made-up account.
+     */
+    notifyStaffSpawn(staff: Player, target: Player, itemId: number, count: number) {
+        if (!Environment.node.production || staff.account_id <= 0) {
+            return;
+        }
+
+        this.loginThread.postMessage({
+            type: 'player_spawn',
+            staff_account_id: staff.account_id,
+            target_account_id: target.account_id > 0 ? target.account_id : null,
+            item_id: itemId,
+            count,
+            world: Environment.node.id
+        });
+    }
+
+    /**
      * A Report Abuse, and - for the two reasons a mouse stream can answer - the
      * evidence that goes with it.
      *
