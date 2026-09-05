@@ -166,6 +166,44 @@ The postgres side has no baseline problem: `0_init` was never edited, and the
 later changes are their own migrations, `1_register_caps`, `2_website_login`,
 `3_message_centre` and `4_evidence_and_records`.
 
+#### The SQL API
+
+Postgres only. The `website` role has **no privilege on any table in `public`** —
+`select * from punishment` as `website` is refused, and so is every other table
+these functions read. What it has instead is `EXECUTE` on thirty-two
+`SECURITY DEFINER` functions in the `accounts` schema, each with
+`search_path` pinned to `public, pg_temp`, and that list is the entire surface a
+leaked website credential reaches. `4_evidence_and_records` adds twelve of them
+and replaces two:
+
+- **staff** (`staff_report`, `staff_report_input`, `staff_report_chat`,
+  `staff_report_wealth`, `staff_wealth`, and `staff_reports` again with the
+  report's `uuid`, `has_evidence` and `resolution`) — every one guarded by
+  `accounts.is_staff(p_actor)`, which re-reads `staffmodlevel` from the database
+  on every call, so a stale cookie promotes nobody. They return no raw address:
+  `same_ip_as_reporter` is a boolean, and that boolean is all an ip ever becomes.
+- **staff writes** (`staff_report_resolve`, `staff_lift`, `staff_punishment_note`).
+  The first two re-type the moderator's password — the same compare-and-set
+  against their own bcrypt hash `staff_notice` uses, in a rate-limit bucket of
+  its own — because one deletes evidence and the other edits the public record.
+  Resolving a report as `dismissed` deletes its `report_input` and `report_chat`
+  rows immediately. All three leave a `staff_action` row.
+- **public** (`public_punishments`, `public_economy`, `public_economy_flow`,
+  `public_staff_spawns`) — the transparency reads. They select only the public
+  columns: no issuing or lifting moderator, no account id, no address, no name
+  on a census or a spawn. The census functions read one profile,
+  `app.public_profile` or `main`.
+- **`reap()`**, replaced. Same signature, still hourly under pg_cron, and it now
+  also takes `session_wealth` older than seven days and the evidence of reports
+  older than thirty days or dismissed. **Chat is not in it**: `public_chat` and
+  `private_chat` are swept by their own writer, the friend server, an hour after
+  they were said, because that sweep has to work on sqlite and mysql too.
+
+`test/EvidenceSql.test.ts` reads the migration back and asserts the grant list,
+those retention windows, and that no `public_*` function so much as mentions an
+issuer or an address. Nothing in this repo executes the file — the proof that it
+answers correctly is a throwaway postgres, never the live pooler.
+
 ## Reports and evidence
 
 A Report Abuse used to reach a moderator as a row with a reason code and
