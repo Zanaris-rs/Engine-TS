@@ -37,6 +37,22 @@ export type account_message = {
     created_at: Generated<Timestamp>;
     read_at: Timestamp | null;
 };
+export type economy_flow = {
+    id: Generated<number>;
+    taken_at: Generated<Timestamp>;
+    profile: string;
+    item_id: number;
+    delta: number;
+};
+export type economy_snapshot = {
+    id: Generated<number>;
+    taken_at: Generated<Timestamp>;
+    profile: string;
+    players: number;
+    coins: number;
+    items: unknown;
+    tracked: unknown;
+};
 export type friendlist = {
     account_id: number;
     friend_account_id: number;
@@ -96,6 +112,19 @@ export type public_chat = {
     coord: number;
     message: string;
 };
+export type punishment = {
+    id: Generated<number>;
+    account_id: number;
+    username: string;
+    kind: string;
+    issued_at: Generated<Timestamp>;
+    until: Timestamp | null;
+    automated: Generated<boolean>;
+    issued_by_account_id: number | null;
+    note: string | null;
+    lifted_at: Timestamp | null;
+    lifted_by_account_id: number | null;
+};
 export type report = {
     id: Generated<number>;
     session_uuid: string;
@@ -105,6 +134,33 @@ export type report = {
     reason: number;
     reporter_account_id: number | null;
     world: number | null;
+    uuid: string | null;
+    offender_account_id: number | null;
+    offender_session_uuid: string | null;
+    offender_coord: number | null;
+    resolved_at: Timestamp | null;
+    resolution: string | null;
+    resolved_by_account_id: number | null;
+    staff_note: string | null;
+};
+export type report_chat = {
+    id: Generated<number>;
+    report_uuid: string;
+    at: Timestamp;
+    kind: string;
+    to_username: string | null;
+    coord: number;
+    message: string;
+};
+export type report_input = {
+    id: Generated<number>;
+    report_uuid: string;
+    seq: number;
+    kind: string;
+    client: string;
+    started_at: Timestamp;
+    flushed_at: Timestamp;
+    data: Buffer;
 };
 export type session = {
     uuid: string;
@@ -148,6 +204,15 @@ export type staff_action = {
     target: string;
     created_at: Generated<Timestamp>;
 };
+export type staff_spawn = {
+    id: Generated<number>;
+    staff_account_id: number;
+    target_account_id: number | null;
+    item_id: number;
+    count: number;
+    world: number;
+    created_at: Generated<Timestamp>;
+};
 export type ticket = {
     id: Generated<number>;
     account_id: number;
@@ -169,6 +234,8 @@ export type DB = {
     account: account;
     account_login: account_login;
     account_message: account_message;
+    economy_flow: economy_flow;
+    economy_snapshot: economy_snapshot;
     friendlist: friendlist;
     hiscore: hiscore;
     hiscore_large: hiscore_large;
@@ -178,12 +245,16 @@ export type DB = {
     login_attempt: login_attempt;
     private_chat: private_chat;
     public_chat: public_chat;
+    punishment: punishment;
     report: report;
+    report_chat: report_chat;
+    report_input: report_input;
     session: session;
     session_log: session_log;
     session_wealth: session_wealth;
     signup_attempt: signup_attempt;
     staff_action: staff_action;
+    staff_spawn: staff_spawn;
     ticket: ticket;
     ticket_message: ticket_message;
 };

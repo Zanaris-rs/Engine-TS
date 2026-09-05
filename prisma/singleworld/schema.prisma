@@ -154,6 +154,11 @@ model session_wealth {
     recipient_session String?
     recipient_items   String?
     recipient_value   Int?
+
+    // the bare timestamp is the 7-day retention sweep; the compound one is how
+    // the report evidence functions find one session's rows in a window.
+    @@index([timestamp])
+    @@index([session_uuid, timestamp])
 }
 
 model public_chat {
@@ -164,6 +169,10 @@ model public_chat {
 
     coord   Int
     message String
+
+    // the hourly retention sweep, then the evidence copy by session.
+    @@index([timestamp])
+    @@index([session_uuid, timestamp])
 }
 
 model private_chat {
@@ -176,6 +185,10 @@ model private_chat {
     coord         Int
     to_account_id Int
     message       String
+
+    // the hourly retention sweep, then the evidence copy by sender.
+    @@index([timestamp])
+    @@index([account_id, timestamp])
 }
 
 model report {
@@ -193,7 +206,25 @@ model report {
     reporter_account_id Int?
     world               Int?
 
+    // The world generates `uuid` and sends it to both the login server (this
+    // row) and the logger server (report_input / report_chat), so the two hub
+    // processes need no ordering. Null on every row older than migration 4,
+    // and its index is deliberately not unique: several reports against the
+    // same offender inside one capture window share a uuid.
+    uuid                  String?
+    offender_account_id   Int?
+    offender_session_uuid String?
+    offender_coord        Int?
+
+    // resolution is actioned | dismissed | watch, null while it is open.
+    resolved_at            DateTime?
+    resolution             String?
+    resolved_by_account_id Int?
+    staff_note             String?
+
     @@index([timestamp(sort: Desc)])
+    @@index([uuid])
+    @@index([offender_account_id, timestamp(sort: Desc)])
 }
 
 model input_report {
@@ -282,4 +313,130 @@ model staff_action {
     created_at DateTime @default(now())
 
     @@index([actor_account_id, action, created_at])
+}
+
+// ---------------------------------------------------------------------------
+// report evidence, the public record, and the economy census
+// ---------------------------------------------------------------------------
+//
+// No foreign keys, like every other table here; the SQL API in
+// prisma/postgres/migrations/4_evidence_and_records owns the rules the website
+// is allowed to rely on, and nothing outside a SECURITY DEFINER function ever
+// reads these rows. Evidence lives 30 days or until the report is dismissed,
+// whichever comes first.
+//
+// economy_snapshot.items/tracked are jsonb on postgres and plain text here:
+// sqlite has no json column type, and the writer hands the same JSON string to
+// every backend.
+
+model report_input {
+    id Int @id @default(autoincrement())
+
+    // kind is ring | live - a chunk that had already rotated out of the
+    // player's ring when the report arrived, or one captured after it. client
+    // is web | java. `data` is the engine's own record framing, decoded by the
+    // website and never by the database.
+    report_uuid String
+    seq         Int
+    kind        String
+    client      String
+
+    started_at DateTime
+    flushed_at DateTime
+
+    data Bytes
+
+    @@index([report_uuid, seq])
+}
+
+model report_chat {
+    id Int @id @default(autoincrement())
+
+    // the offender's own chat in the report window, copied out of public_chat
+    // and private_chat before the hourly sweep deletes it. kind is public |
+    // private_sent; to_username is null on a public row.
+    report_uuid String
+    at          DateTime
+    kind        String
+    to_username String?
+    coord       Int
+    message     String
+
+    @@index([report_uuid, at])
+}
+
+model punishment {
+    id Int @id @default(autoincrement())
+
+    // kind is ban | mute; `until` null is permanent. automated is true when the
+    // engine issued it rather than a person, and issued_by_account_id is then
+    // null. Neither the issuer nor the flag's source ever reaches the public
+    // page: it says "a moderator" or "automated" and nothing more.
+    account_id Int
+    username   String
+    kind       String
+
+    issued_at            DateTime  @default(now())
+    until                DateTime?
+    automated            Boolean   @default(false)
+    issued_by_account_id Int?
+
+    // the optional one-line public explanation, and the reversal. The row is
+    // never deleted - that is what makes it a record.
+    note                 String?
+    lifted_at            DateTime?
+    lifted_by_account_id Int?
+
+    @@index([issued_at(sort: Desc)])
+    @@index([account_id])
+}
+
+model staff_spawn {
+    id Int @id @default(autoincrement())
+
+    // every item a staff member creates on a production world, so the economy
+    // census can say "added by staff" rather than leave a step unexplained.
+    // target_account_id is null when the cheat named someone the login server
+    // could not resolve; the spawn still happened.
+    staff_account_id  Int
+    target_account_id Int?
+    item_id           Int
+    count             Int
+    world             Int
+
+    created_at DateTime @default(now())
+
+    @@index([created_at(sort: Desc)])
+}
+
+model economy_snapshot {
+    id Int @id @default(autoincrement())
+
+    // the hourly census of every save file. `items` is the whole thing as
+    // {item_id: count}; `tracked` is the subset named in
+    // data/config/economy.json, stored beside it so a later edit to that list
+    // cannot rewrite history. coins is item 995 summed across every save, which
+    // passes 2^31 long before the player count does anything interesting.
+    taken_at DateTime @default(now())
+    profile  String
+    players  Int
+    coins    BigInt
+    items    String
+    tracked  String
+
+    @@index([profile, taken_at(sort: Desc)])
+}
+
+model economy_flow {
+    id Int @id @default(autoincrement())
+
+    // per tracked item, the signed change against the previous snapshot:
+    // positive entered the game, negative left it. Nothing here names an
+    // account.
+    taken_at DateTime @default(now())
+    profile  String
+    item_id  Int
+    delta    Int
+
+    @@index([profile, taken_at(sort: Desc)])
 }
