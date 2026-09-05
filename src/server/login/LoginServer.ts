@@ -145,20 +145,35 @@ async function recordPunishment(kind: PunishmentKind, username: string, until: D
 }
 
 /**
+ * How far back the fallback will look for the offender's session.
+ *
+ * The point of `offender_session_uuid` is to be the key the logger's
+ * `public_chat` and `session_wealth` rows are filed under, so a staff member
+ * reading the report is reading what the offender did *around the offence*. A
+ * session from last month is not that: the offender was somewhere else, doing
+ * something else, and pointing the report at it is worse than pointing it at
+ * nothing, because a null says "we do not know" and a stale uuid says "here".
+ */
+const OFFENDER_SESSION_WINDOW_MS = 24 * 60 * 60 * 1000;
+
+/**
  * Who a report is about.
  *
  * The world fills these two in only when the offender happened to be on it -
  * which is the common case, but not a cross-world report and not a report of
  * somebody who logged off between the offence and the Report Abuse screen. The
  * login server has the whole account table, so it finishes the job: the account
- * by username, and then that account's newest session on this profile, which is
- * the one the logger's `public_chat` and `session_wealth` rows are keyed by.
+ * by username, and then that account's newest session on this profile, as long
+ * as it started inside {@link OFFENDER_SESSION_WINDOW_MS} of the report.
+ *
+ * The account has no such window - an account is the same account whenever it
+ * was last seen, and the report is about a person.
  *
  * A lookup failure is not worth losing the report over, so it falls back to
  * whatever the world managed to resolve - null included. The row still names
  * the offender.
  */
-async function resolveOffender(profile: string, offender: string, accountId: number | null, sessionUuid: string | null): Promise<{ accountId: number | null; sessionUuid: string | null }> {
+async function resolveOffender(profile: string, offender: string, reportedAt: Date, accountId: number | null, sessionUuid: string | null): Promise<{ accountId: number | null; sessionUuid: string | null }> {
     if (accountId !== null && sessionUuid !== null) {
         return { accountId, sessionUuid };
     }
@@ -174,7 +189,13 @@ async function resolveOffender(profile: string, offender: string, accountId: num
         let session = sessionUuid;
 
         if (session === null && id !== null) {
-            const newest = await db.selectFrom('session').select('uuid').where('account_id', '=', id).where('profile', '=', profile).orderBy('timestamp', 'desc').limit(1).executeTakeFirst();
+            // the window bound goes in as a Date: kysely types a comparison
+            // against the column's read type, and every backend binds one -
+            // the sqlite driver formats it with the same `toSqlDateTime`
+            // `toDbDate` uses
+            const since = new Date(reportedAt.getTime() - OFFENDER_SESSION_WINDOW_MS);
+
+            const newest = await db.selectFrom('session').select('uuid').where('account_id', '=', id).where('profile', '=', profile).where('timestamp', '>', since).orderBy('timestamp', 'desc').limit(1).executeTakeFirst();
             session = newest?.uuid ?? null;
         }
 
@@ -611,9 +632,12 @@ export default class LoginServer {
                         // the logger server filed under it. It is null when
                         // nothing was captured: any reason but macroing or bug
                         // abuse, or an offender who was not online to capture.
+                        const reportedAt = new Date(nodeTime ?? Date.now());
+
                         const offenderIds = await resolveOffender(
                             profile,
                             offender,
+                            reportedAt,
                             typeof offender_account_id === 'number' && offender_account_id > 0 ? offender_account_id : null,
                             typeof offender_session_uuid === 'string' ? offender_session_uuid : null
                         );
@@ -622,7 +646,7 @@ export default class LoginServer {
                             .insertInto('report')
                             .values({
                                 session_uuid,
-                                timestamp: toDbDate(nodeTime ?? Date.now()),
+                                timestamp: toDbDate(reportedAt),
                                 coord,
                                 offender,
                                 reason,
@@ -643,6 +667,16 @@ export default class LoginServer {
                         // the economy page can account for what a moderator
                         // added alongside what players mined and killed for.
                         const { staff_account_id, target_account_id, item_id, count, world } = msg;
+
+                        // `msg` is `any` - it is whatever arrived on a socket -
+                        // so every column of this row is checked, not just the
+                        // nullable ones. The three that cannot be null are the
+                        // reason the whole message is dropped rather than
+                        // written with a NaN or an undefined in it.
+                        if (typeof staff_account_id !== 'number' || staff_account_id <= 0 || typeof item_id !== 'number' || typeof count !== 'number' || count <= 0) {
+                            console.error('ignoring a malformed player_spawn from world %s', nodeId);
+                            return;
+                        }
 
                         await staffSpawnInsertQuery(db, {
                             staffAccountId: staff_account_id,

@@ -2404,13 +2404,18 @@ class World {
      * unreadable if it were. `::give`, `::givecrap` and `::givemany` name the
      * staff member as their own recipient; `::giveother` names somebody else.
      *
+     * `count` is what `invAdd` actually took, not what the moderator asked
+     * for: a full backpack turns `::givemany` into nothing at all, and the
+     * economy page counts items that exist. Zero of them is not a spawn, so
+     * nothing is logged.
+     *
      * An account id of 0 or less means the world never got one from the login
      * server, and `staff_spawn.staff_account_id` is the one column that cannot
      * be null - so there is nothing to attribute the row to and it is dropped
      * rather than written against a made-up account.
      */
     notifyStaffSpawn(staff: Player, target: Player, itemId: number, count: number) {
-        if (!Environment.node.production || staff.account_id <= 0) {
+        if (!Environment.node.production || staff.account_id <= 0 || count <= 0) {
             return;
         }
 

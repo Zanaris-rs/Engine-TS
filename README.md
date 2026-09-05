@@ -205,6 +205,41 @@ framing itself is a cross-repo contract, pinned in
 Chat is swept hourly by the friend server, an hour after it was said. The
 evidence copy is what keeps any of it.
 
+### Punishments and the public record
+
+`account.banned_until` and `account.muted_until` are *state* - whether somebody
+can log in or be heard right now - and lifting one erases it. So every ban and
+every mute also writes a row to `punishment`, which is the permanent record the
+website's `/bans` page reads: kind, when, until when, whether a person or an
+automated check decided, and whether it was lifted. Nothing rewrites or deletes
+one. A ban extended inside the hour leaves **one** message-centre notice (the
+latest one, rewritten) and **two** punishment rows, because two decisions were
+taken.
+
+This happens on a dev world too. `::ban` and `::mute` are production-gated, but
+the automated paths are not - a Report Abuse with a reason code outside the enum
+and private-message spam both ban for two days on any world with the login
+server enabled. Those bans are real, so the rows recording them are too.
+
+Two commands read and undo it:
+
+```sh
+npm run account -- punishments [name]        # the public record, newest first
+npm run account -- lift <name> [--from <staff>]
+```
+
+`lift` does both writes - `banned_until`/`muted_until` to null *and*
+`punishment.lifted_at` - which is why it exists: an `UPDATE account SET
+banned_until = NULL` in psql lets the player back in while `/bans` goes on
+saying they are serving a ban nothing will ever revisit. Only punishments still
+in force are stamped; one that already expired was not lifted by anybody.
+
+**A lifted mute does not reach a player who is already online.**
+`player.muted_until` is read from the database at login and cached in the world
+process, and `lift` writes to the database only - so somebody muted and then
+lifted mid-session stays muted until they log out and back in. A lifted ban has
+no such problem: `banned_until` is only ever read on the way in.
+
 ### Running the logger in dev
 
 The evidence goes to the **logger server**. A world that cannot reach it holds
