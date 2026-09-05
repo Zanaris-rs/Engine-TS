@@ -251,11 +251,15 @@ LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $$
     LIMIT 1;
 $$;
 
--- Which profile `/economy` is about.
+-- Which profile a read with nothing else to go on is about: `/economy`, and the
+-- staff wealth search box.
 --
 -- One database serves every profile a fleet runs, and a public page that added
 -- a beta world's coins to a live world's would be wrong in a way nobody could
--- see. This is deliberately a constant in a function granted to nobody, and
+-- see. The reads that *do* have something to go on do not call this - a report
+-- takes the profile from the reporter's own session, which is a fact about the
+-- report rather than a default. This is deliberately a constant in a function
+-- granted to nobody, and
 -- deliberately *not* `current_setting('app.public_profile')`: a GUC is settable
 -- for the session by whoever holds the connection, so `website` could have
 -- pointed the public page at any profile it liked by sending one SET before the
@@ -345,6 +349,7 @@ LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $$
            CASE WHEN offender.id IS NULL THEN NULL ELSE
                (SELECT count(*)::int FROM public.session s
                  WHERE s.account_id = offender.id
+                   AND (reporter_session.profile IS NULL OR s.profile = reporter_session.profile)
                    AND s.timestamp > r.timestamp - interval '24 hours'
                    AND s.timestamp <= r.timestamp) END,
            r.resolved_at, r.resolution, coalesce(resolver.username, ''), coalesce(r.staff_note, ''),
@@ -364,20 +369,34 @@ LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $$
     -- The session the offender was on: the one the report names, or - when the
     -- world could not name one - their newest login before the report.
     --
+    -- Pinned to the reporter's own profile, which is the only thing on the row
+    -- that says which world this report happened on. One database serves every
+    -- profile a fleet runs and an account with a character on main and one on
+    -- beta is the same `account_id` on both, so the fallback used to be able to
+    -- pick a beta session for a report filed on main - putting the wrong world
+    -- on the page and, worse, handing a *different* address to
+    -- same_ip_as_reporter. It also makes the lookup an index scan:
+    -- 2_website_login's only index on `session` leads with profile.
+    --
+    -- A report with no reporter session (rows written before 3_message_centre)
+    -- has no profile to pin to and is left as it was - one profile's worth of
+    -- guessing is still better than none, and `report` carries no profile of
+    -- its own to do better with.
+    --
     -- Both branches insist the session belongs to the offender. The named one
     -- has to as well: `report.offender_session_uuid` is written by a world that
     -- guessed, or by the login server's own newest-session lookup, and a uuid
     -- that turns out to be somebody else's would put a stranger's world on the
-    -- page and - worse - hand their address to same_ip_as_reporter. When the
-    -- offender resolved to no account at all there is nothing to check it
-    -- against, and the named session is taken as it stands.
+    -- page too. When the offender resolved to no account at all there is
+    -- nothing to check it against, and the named session is taken as it stands.
     LEFT JOIN LATERAL (
         SELECT s.world, s.ip
         FROM public.session s
-        WHERE (r.offender_session_uuid IS NOT NULL AND s.uuid = r.offender_session_uuid
-               AND (offender.id IS NULL OR s.account_id = offender.id))
-           OR (r.offender_session_uuid IS NULL AND offender.id IS NOT NULL
-               AND s.account_id = offender.id AND s.timestamp <= r.timestamp)
+        WHERE (reporter_session.profile IS NULL OR s.profile = reporter_session.profile)
+          AND ((r.offender_session_uuid IS NOT NULL AND s.uuid = r.offender_session_uuid
+                AND (offender.id IS NULL OR s.account_id = offender.id))
+            OR (r.offender_session_uuid IS NULL AND offender.id IS NOT NULL
+                AND s.account_id = offender.id AND s.timestamp <= r.timestamp))
         ORDER BY s.timestamp DESC
         LIMIT 1
     ) offender_session ON true
@@ -411,15 +430,28 @@ $$;
 --
 -- Ordered by time, because the page renders them in the order they arrive and
 -- marks the ones after the report instant rather than re-sorting.
+--
+-- `total` is the same number on every row: how many lines the report actually
+-- has, before the limit. A window function is computed after WHERE and before
+-- ORDER BY and LIMIT, so `count(*) OVER ()` is the count of the whole match and
+-- the LIMIT then takes the first page of it - one query, no second round trip.
+-- The page needs it to say "2000 of 3411" rather than showing two thousand
+-- lines as though they were all of them, which is the difference between a
+-- truncated transcript and a transcript that lies.
+--
+-- 2000 rather than 500 because the copy the logger server takes is itself
+-- capped at CHAT_COPY_LIMIT per window, and 500 was cutting real evidence off
+-- inside a limit the writer had already applied.
 CREATE OR REPLACE FUNCTION accounts.staff_report_chat(p_actor text, p_id int)
-RETURNS TABLE (at timestamptz, kind text, to_username text, coord int, message text)
+RETURNS TABLE (at timestamptz, kind text, to_username text, coord int, message text, total int)
 LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $$
-    SELECT rc.at, rc.kind, coalesce(rc.to_username, ''), rc.coord, rc.message
+    SELECT rc.at, rc.kind, coalesce(rc.to_username, ''), rc.coord, rc.message,
+           (count(*) OVER ())::int
     FROM public.report r
     JOIN public.report_chat rc ON rc.report_uuid = r.uuid
     WHERE accounts.is_staff(p_actor) AND r.id = p_id
     ORDER BY rc.at, rc.id
-    LIMIT 500;
+    LIMIT 2000;
 $$;
 
 -- What the offender gained and lost in the window.
@@ -429,6 +461,20 @@ $$;
 -- offender's sessions inside the report's window while it is still there. A
 -- report older than a week answers empty, which is why the page treats a
 -- failure here as a missing block rather than a missing report.
+--
+-- `rs` is the reporter's own session, and it is here to say which profile the
+-- report happened on. An account with a character on main and one on beta is
+-- one `account_id`, so without it a trade made on beta could be quoted inside
+-- the window of a report filed on main - the wrong player's afternoon, under a
+-- heading naming the right one. It also puts the offender lookup on
+-- 2_website_login's (profile, account_id, timestamp DESC) index instead of a
+-- sequential scan of `session`.
+--
+-- An inner join, so a report that names no reporter session answers empty
+-- rather than answering from every profile at once. That is every row written
+-- before 3_message_centre added `session_uuid`, and all of them are years past
+-- the seven days `session_wealth` lives, so the rows they would have found are
+-- gone either way.
 CREATE OR REPLACE FUNCTION accounts.staff_report_wealth(p_actor text, p_id int)
 RETURNS TABLE (at timestamptz, event_type int, coord int, items text, value int,
                counterpart text, counterpart_items text, counterpart_value int)
@@ -436,7 +482,9 @@ LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $$
     SELECT sw.timestamp, sw.event_type, sw.coord, sw.account_items, sw.account_value,
            coalesce(sw.recipient_session, ''), coalesce(sw.recipient_items, ''), sw.recipient_value
     FROM public.report r
+    JOIN public.session rs ON rs.uuid = r.session_uuid
     JOIN public.session s ON s.account_id = accounts.report_offender(r.id)
+                         AND s.profile = rs.profile
     JOIN public.session_wealth sw ON sw.session_uuid = s.uuid
     WHERE accounts.is_staff(p_actor)
       AND r.id = p_id
@@ -450,6 +498,21 @@ $$;
 -- the seven days the rows live. A `p_since` from before that is raised to it
 -- rather than honoured - a wider window is not a bigger answer, it is the same
 -- answer under a heading that lies about what is missing.
+--
+-- One profile, and it is `accounts.public_profile()` - the same constant
+-- /economy reads. There is nothing on this call that says which profile the
+-- question is about: no report, no session, only a username and a date. The
+-- alternative considered was the *actor's* newest session, and it was rejected
+-- because it makes the search box answer differently depending on which world
+-- the moderator last logged into - the same query, the same player, a different
+-- answer tomorrow, and nothing on the page to say why. A constant is the same
+-- answer for every moderator, and it is the answer for the profile the public
+-- record is already about. Changing it is a migration, which is the right
+-- weight for the decision.
+--
+-- The cost is that a beta-only investigation cannot be started from this box.
+-- The report page can: it pins to the profile the report was filed on, which is
+-- a fact about the report rather than a guess about the moderator.
 CREATE OR REPLACE FUNCTION accounts.staff_wealth(p_actor text, p_username text, p_since timestamptz)
 RETURNS TABLE (at timestamptz, event_type int, coord int, items text, value int,
                counterpart text, counterpart_items text, counterpart_value int)
@@ -458,6 +521,7 @@ LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $$
            coalesce(sw.recipient_session, ''), coalesce(sw.recipient_items, ''), sw.recipient_value
     FROM public.account a
     JOIN public.session s ON s.account_id = a.id
+                         AND s.profile = accounts.public_profile()
     JOIN public.session_wealth sw ON sw.session_uuid = s.uuid
     WHERE accounts.is_staff(p_actor)
       AND a.username = lower(replace(coalesce(p_username, ''), ' ', '_'))
@@ -609,8 +673,6 @@ BEGIN
     RETURN 'ok';
 END; $$;
 
--- 'ok' | 'forbidden' | 'not_found' | 'invalid'.
---
 -- 'ok' | 'forbidden' | 'rate_limited' | 'not_found' | 'invalid'.
 --
 -- The one-line public explanation on a punishment. No password: it writes a
@@ -853,13 +915,21 @@ GRANT EXECUTE ON FUNCTION accounts.reap() TO website;
 -- Fourteen GRANT statements above: twelve functions this migration adds, plus
 -- staff_reports and reap, which it replaces and which were already granted by
 -- 2_website_login and 3_message_centre. That takes the website role to
--- **thirty-two** executable functions in accounts, and to exactly as many table
--- privileges as it had on the day 0_init created it: none. `select * from
--- punishment` as website is refused, and so is `select * from report_input`,
--- `report_chat`, `staff_spawn`, `economy_snapshot` and `economy_flow`.
+-- **thirty-two** executable functions in accounts, and to exactly as many
+-- privileges on a table in schema `public` as it had on the day 0_init created
+-- it: none in public. `select * from punishment` as website is refused, and so
+-- is `select * from report_input`, `report_chat`, `staff_spawn`,
+-- `economy_snapshot` and `economy_flow`.
+--
+-- "None in public" and not "none": 0_init grants website USAGE on schema
+-- `hiscores` and SELECT on the two views in it, `hiscores.hiscore_public` and
+-- `hiscores.hiscore_large_public`. Those are the hiscores, which are public by
+-- definition and are read as views rather than through a function. Nothing this
+-- migration adds is reachable that way, and nothing in `public` is reachable
+-- that way at all.
 --
 -- Ungranted on purpose, still: is_staff, throttled, record_failure, and now
--- report_offender and public_profile. Six functions in accounts that no role
+-- report_offender and public_profile. Five functions in accounts that no role
 -- may call directly, and thirty-two that website may.
 --
 -- Two things a reader of the next migration should know, neither of them fixed
@@ -878,16 +948,19 @@ GRANT EXECUTE ON FUNCTION accounts.reap() TO website;
 --   verb should know they are joining a shared ceiling rather than opening a
 --   new one.
 --
---   public.session has no index leading with account_id. The only one is
---   2_website_login's (profile, account_id, timestamp DESC), and staff_report's
---   offender-session fallback and staff_report_wealth both look a player up
---   without a profile to pass - `report` does not carry one. One report at a
---   time on a staff page, so it is cheap today and a sequential scan of
---   `session` when that table is large. Either an (account_id, timestamp DESC)
---   index or a profile column on `report` fixes it; both are a later
---   migration's job, and the second would fix a correctness wrinkle too (an
---   account with a character on two profiles can have a wealth event from the
---   wrong one quoted inside the window).
+--   `report` still carries no profile of its own. public.session's only index
+--   is 2_website_login's (profile, account_id, timestamp DESC), so a lookup
+--   with no profile to pass is a sequential scan - and, worse, an answer from
+--   the wrong world, because an account with a character on main and one on
+--   beta is one `account_id` on both. staff_report's offender-session fallback,
+--   its offender_logins_24h and staff_report_wealth all take the profile from
+--   the *reporter's* session now, which is the nearest thing on the row to a
+--   fact about where the report happened, and that is both correct and
+--   indexable. But it is inferred: a report whose reporter session is missing
+--   (every row written before 3_message_centre added `session_uuid`) pins
+--   nothing in staff_report and answers empty in staff_report_wealth. A profile
+--   column on `report`, written by the world that files it, would let all three
+--   stop inferring; that is a later migration's job.
 
 -- ---------------------------------------------------------------------------
 -- rollback

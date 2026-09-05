@@ -275,6 +275,47 @@ test('the offender session on a report has to belong to the offender', () => {
     assert.equal(lateral.match(/s\.account_id = offender\.id/g)?.length, 2, 'both branches check it');
 });
 
+test("every read of a player's sessions is pinned to one profile", () => {
+    // One database serves every profile a fleet runs, and an account with a
+    // character on main and one on beta is the same `account_id` on both. A
+    // session lookup with no profile in it is therefore both a sequential scan
+    // (2_website_login's only index on `session` leads with profile) and an
+    // answer that can come from the wrong world - a beta trade quoted inside
+    // the window of a report filed on main.
+    //
+    // The report functions take it from the reporter's own session, which is a
+    // fact about the report. staff_wealth has no such fact to read - a username
+    // and a date is all it is given - so it takes the constant.
+    const report = defined.get('staff_report')!.body;
+
+    // the offender-session fallback and the 24-hour login count, both of which
+    // look a player up by account_id alone
+    assert.equal(report.match(/reporter_session\.profile IS NULL OR s\.profile = reporter_session\.profile/g)?.length, 2, 'staff_report pins both session reads');
+
+    const wealth = defined.get('staff_report_wealth')!.body;
+
+    assert.ok(wealth.includes('JOIN public.session rs ON rs.uuid = r.session_uuid'), 'staff_report_wealth reads the reporter session');
+    assert.ok(wealth.includes('s.profile = rs.profile'), 'staff_report_wealth pins the offender to it');
+
+    // the constant, not the actor's newest session: the same query must not
+    // answer differently depending on which world a moderator last logged into
+    const search = defined.get('staff_wealth')!.body;
+
+    assert.ok(search.includes('s.profile = accounts.public_profile()'), 'staff_wealth pins the constant');
+});
+
+test('the chat transcript says how much of it there is', () => {
+    const { header, body } = defined.get('staff_report_chat')!;
+
+    // A window function is computed after WHERE and before ORDER BY and LIMIT,
+    // so this is the count of the whole match and the LIMIT then takes a page
+    // of it. Without it the page shows two thousand lines as though they were
+    // all of them, which is a transcript that lies rather than one that is cut.
+    assert.ok(header.includes('total int'), 'the total is a column');
+    assert.ok(body.includes('(count(*) OVER ())::int'), 'counted before the limit');
+    assert.ok(body.includes('LIMIT 2000'), 'and the page is two thousand');
+});
+
 test('the staff wealth search never claims more than the seven days the rows live', () => {
     const { body } = defined.get('staff_wealth')!;
 
