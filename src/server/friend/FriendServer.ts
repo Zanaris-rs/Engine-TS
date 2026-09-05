@@ -1,6 +1,7 @@
 import { WebSocket, WebSocketServer } from 'ws';
 
 import { db, toDbDate } from '#/db/query.js';
+import { CHAT_SWEEP_DELAY_MS, CHAT_SWEEP_INTERVAL_MS, sweepChat } from '#/server/friend/ChatRetention.js';
 import { FriendsClientOpcodes, FriendsServerOpcodes } from '#/server/friend/FriendOpcodes.js';
 import { FriendServerRepository } from '#/server/friend/FriendServerRepository.js';
 import { ChatModePrivate } from '#/engine/entity/ChatModes.js';
@@ -10,25 +11,6 @@ import { printInfo } from '#/util/Logger.js';
 
 // TODO make this configurable (or at least source it from somewhere common)
 const WORLD_PLAYER_LIMIT = 2000;
-
-/**
- * How long chat is kept.
- *
- * `public_chat` and `private_chat` have been written here since the Postgres
- * cutover with no retention and no reader: every line anybody has said in game
- * is still in the database. An hour is long enough for the two things that
- * actually read it - a moderator looking at a report, and the logger server
- * copying the offender's own lines into `report_chat` - and short enough that
- * the table is not a standing record of everybody's conversations.
- *
- * The writer is the reaper on purpose: this runs on sqlite dev worlds too,
- * where there is no pg_cron to fall back on.
- */
-const CHAT_RETENTION_MS = 60 * 60 * 1000;
-
-/** How often the sweep runs, and how long it waits before its first pass. */
-const CHAT_SWEEP_INTERVAL_MS = 60 * 60 * 1000;
-const CHAT_SWEEP_DELAY_MS = 60_000;
 
 /**
  * TODO refactor, this class shares a lot with the other servers
@@ -393,12 +375,10 @@ export class FriendServer {
     }
 
     /**
-     * Delete chat older than the retention window.
+     * Delete chat older than the retention window, in batches.
      *
-     * The cutoff goes in as a `Date`: Kysely types a comparison against the
-     * column's read type, the sqlite driver formats it into the same UTC string
-     * it stored, and pg and mysql2 bind one natively - which is the same reason
-     * nothing here writes `now()`.
+     * The rule and the loop are {@link ChatRetention}'s, which is what lets a
+     * test drive them; this is the timer's end of it.
      *
      * It catches for itself: there is no caller to catch for a timer, and an
      * unhandled rejection here would take the friend server down and with it
@@ -406,12 +386,7 @@ export class FriendServer {
      */
     private async sweepChat() {
         try {
-            const cutoff = new Date(Date.now() - CHAT_RETENTION_MS);
-
-            const said = await db.deleteFrom('public_chat').where('timestamp', '<', cutoff).executeTakeFirst();
-            const sent = await db.deleteFrom('private_chat').where('timestamp', '<', cutoff).executeTakeFirst();
-
-            printInfo(`[Friends]: swept ${Number(said?.numDeletedRows ?? 0)} public and ${Number(sent?.numDeletedRows ?? 0)} private chat rows older than ${cutoff.toISOString()}`);
+            printInfo((await sweepChat(db)).message);
         } catch (err) {
             console.error(err);
         }
