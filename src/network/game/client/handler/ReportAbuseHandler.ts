@@ -11,6 +11,12 @@ import { fromBase37 } from '#/util/JString.js';
  * same 600ms - a modified client could hold the report interface open and post
  * one row into `report` every tick for as long as it liked. Nobody reporting
  * in good faith needs a second one inside half a minute.
+ *
+ * Staff are the exception: this same screen is how a player moderator mutes,
+ * and two mutes half a minute apart is an ordinary afternoon in a bot raid,
+ * not a flood. `staffModLevel` is set from the login reply, so a modified
+ * client cannot claim it, and their reports are still timestamped - the field
+ * is what any later per-account limit would read.
  */
 export const REPORT_ABUSE_COOLDOWN = 30000;
 
@@ -35,7 +41,7 @@ export default class ReportAbuseHandler extends ClientGameMessageHandler<ReportA
 
         const now = Date.now();
 
-        if (now - player.lastReportAbuse < REPORT_ABUSE_COOLDOWN) {
+        if (player.staffModLevel === 0 && now - player.lastReportAbuse < REPORT_ABUSE_COOLDOWN) {
             // nothing is written - not the report, and not the moderator mute
             // that would have ridden along with it
             player.messageGame(RECEIVED);
