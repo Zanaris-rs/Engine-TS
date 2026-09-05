@@ -152,6 +152,34 @@ export class LoginClient extends InternalClient {
         );
     }
 
+    /**
+     * Report Abuse. Fire and forget, like the ban and mute above: the player
+     * has already been thanked by the time this leaves, and a report is not
+     * worth blocking a game tick on. The world sends its own id and the
+     * reporter's account so the staff inbox can say who and where.
+     */
+    public async playerReport(accountId: number, sessionUuid: string, coord: number, offender: string, reason: number) {
+        await this.connect();
+
+        if (!this.ws || !this.wsr || !this.wsr.checkIfWsLive()) {
+            return;
+        }
+
+        this.ws.send(
+            JSON.stringify({
+                type: 'player_report',
+                nodeId: this.nodeId,
+                nodeTime: Date.now(),
+                profile: Environment.node.profile,
+                account_id: accountId,
+                session_uuid: sessionUuid,
+                coord,
+                offender,
+                reason
+            })
+        );
+    }
+
     public async playerMute(staff: string, username: string, until: Date) {
         await this.connect();
 

@@ -1893,7 +1893,7 @@ class World {
                 return;
             }
 
-            const { username, lowMemory, reconnecting, staffmodlevel, muted_until, members, messageCount } = msg;
+            const { username, lowMemory, reconnecting, staffmodlevel, muted_until, members, messageCount, account_id } = msg;
             const save = msg.save ?? new Uint8Array();
 
             // if (reconnecting && !this.getPlayerByUsername(username)) {
@@ -1913,6 +1913,9 @@ class World {
                 const player = PlayerLoading.load(username, new Packet(save), client);
 
                 player.session = client.uuid;
+                // the only place the world learns it: Report Abuse needs it to
+                // name the reporter, and nothing else on the player carries it
+                player.account_id = account_id ?? -1;
                 player.reconnecting = reconnecting;
                 player.staffModLevel = staffmodlevel ?? 0;
                 player.lowMemory = lowMemory;
@@ -2344,8 +2347,13 @@ class World {
                 offenderPlayer.input.active = true;
             }
         }
-        this.loggerThread.postMessage({
-            type: 'report',
+        // to the login thread, not the logger: the logger server is disabled on
+        // this fleet, so every report used to be dropped while the player was
+        // told it had been received. The login server owns the `report` table
+        // and writes the reporter and the world alongside the row.
+        this.loginThread.postMessage({
+            type: 'player_report',
+            account_id: player.account_id,
             session_uuid: player.session,
             coord: player.coord,
             offender,

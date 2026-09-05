@@ -188,6 +188,14 @@ async function handleRequests(parentPort: ParentPort, msg: any) {
             }
             break;
         }
+        case 'player_report': {
+            if (Environment.login.enabled) {
+                // fire and forget, like the ban and mute above
+                const { account_id, session_uuid, coord, offender, reason } = msg;
+                await client.playerReport(account_id, session_uuid, coord, offender, reason);
+            }
+            break;
+        }
         case 'world_heartbeat': {
             break;
         }

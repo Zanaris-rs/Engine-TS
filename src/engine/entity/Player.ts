@@ -389,6 +389,9 @@ export default class Player extends PathingEntity {
     members: boolean = true;
     messageCount: number = 0;
 
+    // set from the login reply; -1 when there is no login server behind us
+    account_id: number = -1;
+
     socialProtect: boolean = false; // social packet spam protection
     reportAbuseProtect: boolean = false; // social packet spam protection
 

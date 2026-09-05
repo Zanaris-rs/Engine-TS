@@ -40,26 +40,9 @@ export default class LoggerClient extends InternalClient {
         );
     }
 
-    public async report(session_uuid: string, coord: number, offender: string, reason: number) {
-        await this.connect();
-
-        if (!this.ws || !this.wsr || !this.wsr.checkIfWsLive()) {
-            return;
-        }
-
-        this.ws.send(
-            JSON.stringify({
-                type: 'report',
-                world: Environment.node.id,
-                profile: Environment.node.profile,
-                session_uuid,
-                timestamp: Date.now(),
-                coord,
-                offender,
-                reason
-            })
-        );
-    }
+    // no report(): Report Abuse goes to the login server now, which owns the
+    // `report` table and knows who pressed the button. LoggerServer still
+    // handles the opcode, for a world old enough to send it.
 
     public async inputTrack(session_uuid: string, timestamp: number, buf: string) {
         await this.connect();

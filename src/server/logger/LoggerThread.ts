@@ -42,13 +42,10 @@ async function handleRequests(_parentPort: ParentPort, msg: any) {
             }
             break;
         }
-        case 'report': {
-            if (Environment.logger.enabled) {
-                const { session_uuid, coord, offender, reason } = msg;
-                await client.report(session_uuid, coord, offender, reason);
-            }
-            break;
-        }
+        // no 'report' case: Report Abuse goes to the login thread now. This
+        // one dropped every report on a fleet with the logger disabled, which
+        // is every fleet we run, while the player was told it had been
+        // received. LoggerServer still handles the opcode for an older world.
         case 'input_track': {
             if (Environment.logger.enabled) {
                 const { session_uuid, timestamp, buf } = msg;

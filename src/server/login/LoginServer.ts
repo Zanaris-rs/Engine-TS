@@ -10,6 +10,7 @@ import { PlayerLoading } from '#/engine/entity/PlayerLoading.js';
 import Packet from '#/io/Packet.js';
 import { updateHiscores } from '#/server/login/Hiscores.js';
 import { handleWithFailureReply, retryReply, type ReplyId, type SendReply } from '#/server/login/LoginMessage.js';
+import { banNotice, countUnread, muteNotice, type ModerationNotice, NOTICE_DUPLICATE_WINDOW_MS, recentNoticeQuery } from '#/server/login/MessageCentre.js';
 import Environment from '#/util/Environment.js';
 import { toSafeName } from '#/util/JString.js';
 import { printInfo } from '#/util/Logger.js';
@@ -23,6 +24,64 @@ async function loadAccount(username: string, profile: string) {
         .where('username', '=', username)
         .selectAll()
         .executeTakeFirst();
+}
+
+/**
+ * The number on the client's welcome screen. A player logs in to play, not to
+ * read their inbox, so a database hiccup here costs them nothing: the count
+ * comes back 0 and the login goes on. `countUnread` has already clamped it to
+ * the 65535 the LAST_LOGIN_INFO packet can carry.
+ */
+async function unreadFor(accountId: number): Promise<number> {
+    try {
+        return await countUnread(db, accountId);
+    } catch (err) {
+        console.error('unread count failed for account_id %s', accountId, err);
+        return 0;
+    }
+}
+
+/**
+ * A ban or a mute leaves a message behind, so the player has somewhere to read
+ * what happened and somewhere to appeal - which is what the client's own "check
+ * your message-centre" screen has always told them to do.
+ *
+ * A second ban inside the hour reuses the first notice rather than adding one:
+ * a moderator extending a ban, or an automated check firing twice, is one
+ * decision, not three messages.
+ */
+async function writeModerationNotice(username: string, notice: ModerationNotice, staffUsername: string) {
+    try {
+        const account = await db.selectFrom('account').select('id').where('username', '=', username).executeTakeFirst();
+
+        if (!account) {
+            return;
+        }
+
+        const recent = await recentNoticeQuery(db, account.id, notice.kind, new Date(Date.now() - NOTICE_DUPLICATE_WINDOW_MS)).executeTakeFirst();
+
+        if (recent) {
+            return;
+        }
+
+        const staff = await db.selectFrom('account').select('id').where('username', '=', staffUsername).executeTakeFirst();
+
+        await db
+            .insertInto('account_message')
+            .values({
+                account_id: account.id,
+                kind: notice.kind,
+                subject: notice.subject,
+                body: notice.body,
+                // null for the automated paths, which have no account behind them
+                created_by_account_id: staff?.id ?? null
+            })
+            .execute();
+    } catch (err) {
+        // the ban itself has already landed; losing the courtesy note must not
+        // turn a moderation action into an unhandled rejection
+        console.error('could not write the %s notice for %s', notice.kind, username, err);
+    }
 }
 
 export default class LoginServer {
@@ -209,6 +268,8 @@ export default class LoginServer {
                                         muted_until: account.muted_until,
                                         save: save.toString('base64'),
                                         members: account.members,
+                                        // a reconnect does not reopen the welcome screen, so
+                                        // the count is never read: not worth a query
                                         messageCount: 0
                                     });
                                 } else {
@@ -256,6 +317,10 @@ export default class LoginServer {
                                 })
                                 .execute();
 
+                            // past every reply that is not a real login, so a
+                            // rejected attempt never pays for the query
+                            const messageCount = await unreadFor(account.id);
+
                             if (!fs.existsSync(`data/players/${profile}/${username}.sav`)) {
                                 // not an error - never logged in before
                                 // ^ Only not an error if the user has never logged in before:
@@ -270,7 +335,11 @@ export default class LoginServer {
                                         account_id: account.id,
                                         staffmodlevel: account.staffmodlevel,
                                         muted_until: account.muted_until,
-                                        messageCount: 0
+                                        // the one reply that never sent it: World reads
+                                        // `members` off the login message and a brand new
+                                        // player was arriving as undefined
+                                        members: account.members,
+                                        messageCount
                                     });
                                 }
                             } else {
@@ -289,7 +358,7 @@ export default class LoginServer {
                                     save: save.toString('base64'),
                                     muted_until: account.muted_until,
                                     members: account.members,
-                                    messageCount: 0
+                                    messageCount
                                 });
                             }
 
@@ -393,7 +462,7 @@ export default class LoginServer {
                                 .executeTakeFirst();
                         }
                     } else if (type === 'player_ban') {
-                        const { _staff, username, until } = msg;
+                        const { staff, username, until } = msg;
 
                         // todo: audit log
 
@@ -404,8 +473,10 @@ export default class LoginServer {
                             })
                             .where('username', '=', username)
                             .executeTakeFirst();
+
+                        await writeModerationNotice(username, banNotice(staff, new Date(until)), staff);
                     } else if (type === 'player_mute') {
-                        const { _staff, username, until } = msg;
+                        const { staff, username, until } = msg;
 
                         // todo: audit log
 
@@ -416,6 +487,30 @@ export default class LoginServer {
                             })
                             .where('username', '=', username)
                             .executeTakeFirst();
+
+                        await writeModerationNotice(username, muteNotice(staff, new Date(until)), staff);
+                    } else if (type === 'player_report') {
+                        // Report Abuse used to go to the logger thread, and the
+                        // logger server is disabled on this fleet, so every report
+                        // was dropped while the player was thanked for it. The
+                        // login server has the database the staff inbox reads, and
+                        // it is the only writer of this table now.
+                        const { account_id, session_uuid, coord, offender, reason } = msg;
+
+                        await db
+                            .insertInto('report')
+                            .values({
+                                session_uuid,
+                                timestamp: toDbDate(nodeTime ?? Date.now()),
+                                coord,
+                                offender,
+                                reason,
+                                // -1 is the world's "we never got an account_id",
+                                // which is not a row anyone can join to
+                                reporter_account_id: typeof account_id === 'number' && account_id > 0 ? account_id : null,
+                                world: nodeId
+                            })
+                            .execute();
                     }
                 });
             });
