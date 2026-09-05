@@ -6,13 +6,19 @@
  *   npm run account -- reset-password <name> <newpassword>
  *   npm run account -- ban-ip <ip>
  *   npm run account -- find-alts <email|ip|ip-group>
+ *   npm run account -- send-notice <name> <subject> <body>
+ *   npm run account -- tickets [open|closed|all]
  *
  * With account.autoCreate off there is no other way to make the first account,
- * and with no mailer there is no other way to recover a lost password.
+ * and with no mailer there is no other way to recover a lost password. The two
+ * message centre commands are the shell-side twin of the website's staff
+ * inbox: the same tables, no session and no password re-type, because whoever
+ * can run this already has the database.
  */
 import * as bcrypt from 'bcrypt-ts';
 
 import { db, toDbDate } from '#/db/query.js';
+import { MESSAGE_KINDS } from '#/server/login/MessageCentre.js';
 import { checkPassword, checkUsername, ipGroup, isValidEmail, normalizeEmail } from '#/util/Account.js';
 import Environment from '#/util/Environment.js';
 import { toDisplayName, toSafeName } from '#/util/JString.js';
@@ -21,7 +27,9 @@ const USAGE = `Usage:
   account.ts create-staff <name> <email> <password> [level] [--force]
   account.ts reset-password <name> <newpassword>
   account.ts ban-ip <ip>
-  account.ts find-alts <email|ip|ip-group>`;
+  account.ts find-alts <email|ip|ip-group>
+  account.ts send-notice <name> <subject> <body>
+  account.ts tickets [open|closed|all]`;
 
 function fail(message: string): never {
     console.error(message);
@@ -176,6 +184,107 @@ async function findAlts(args: string[]) {
     }
 }
 
+/**
+ * The one way to reach a player's Message Centre without the website. Kind
+ * `notice`, no ticket, written in the caller's own name if they name
+ * themselves - `--from <staff>` - and by nobody otherwise, which is what the
+ * welcome message and the automated bans already do.
+ */
+async function sendNotice(args: string[]) {
+    const fromIndex = args.indexOf('--from');
+    const from = fromIndex === -1 ? null : args[fromIndex + 1];
+    const rest = fromIndex === -1 ? args : [...args.slice(0, fromIndex), ...args.slice(fromIndex + 2)];
+    const [name, subject, body] = rest;
+
+    if (!name || !subject || !body) {
+        fail(USAGE);
+    }
+
+    // the same caps the SQL API enforces, so a notice sent here cannot be one
+    // the website would have refused
+    if (subject.length > 120) {
+        fail(`The subject is ${subject.length} characters; the cap is 120.`);
+    }
+
+    if (body.length > 4000) {
+        fail(`The body is ${body.length} characters; the cap is 4000.`);
+    }
+
+    const username = resolveUsername(name, true);
+
+    const account = await db.selectFrom('account').select(['id', 'username']).where('username', '=', username).executeTakeFirst();
+    if (!account) {
+        fail(`No account called '${username}'.`);
+    }
+
+    let author: { id: number; username: string } | undefined;
+    if (from) {
+        const fromUsername = resolveUsername(from, true);
+        author = await db.selectFrom('account').select(['id', 'username']).where('username', '=', fromUsername).executeTakeFirst();
+
+        if (!author) {
+            fail(`No account called '${fromUsername}' to send it from.`);
+        }
+    }
+
+    await db
+        .insertInto('account_message')
+        .values({
+            account_id: account.id,
+            kind: MESSAGE_KINDS[1], // 'notice'
+            subject,
+            body,
+            created_by_account_id: author?.id ?? null
+        })
+        .execute();
+
+    const unread = await db
+        .selectFrom('account_message')
+        .select(eb => eb.fn.countAll().as('unread'))
+        .where('account_id', '=', account.id)
+        .where('read_at', 'is', null)
+        .executeTakeFirst();
+
+    console.log(`Sent a notice to ${toDisplayName(account.username)} (id ${account.id})${author ? ` from ${toDisplayName(author.username)}` : ''}.`);
+    console.log(`They now have ${Number(unread?.unread ?? 0)} unread message(s), which is what the welcome screen will say on their next login.`);
+}
+
+/**
+ * The staff inbox, read-only, for a host with no browser in front of it.
+ * Newest first, and the ones waiting on staff are marked, because that is the
+ * only ordering anyone actually wants.
+ */
+async function tickets(args: string[]) {
+    const [filter = 'open'] = args;
+
+    if (!['open', 'closed', 'all'].includes(filter)) {
+        fail(USAGE);
+    }
+
+    let query = db.selectFrom('ticket').innerJoin('account', 'account.id', 'ticket.account_id').select(['ticket.id', 'ticket.kind', 'ticket.subject', 'ticket.status', 'ticket.updated_at', 'account.username']);
+
+    if (filter !== 'all') {
+        query = query.where('ticket.status', '=', filter);
+    }
+
+    const rows = await query.orderBy('ticket.updated_at', 'desc').limit(50).execute();
+
+    if (rows.length === 0) {
+        console.log(`No ${filter === 'all' ? '' : filter + ' '}tickets.`);
+        return;
+    }
+
+    console.log(`${rows.length} ${filter === 'all' ? '' : filter + ' '}ticket(s), newest first:`);
+    for (const row of rows) {
+        const last = await db.selectFrom('ticket_message').select('from_staff').where('ticket_id', '=', row.id).orderBy('created_at', 'desc').orderBy('id', 'desc').executeTakeFirst();
+        const waiting = last && !last.from_staff ? 'awaiting staff' : '';
+
+        console.log(`  ${String(row.id).padStart(6)}  ${row.status.padEnd(6)}  ${row.kind.padEnd(6)}  ${row.username.padEnd(12)}  ${String(row.updated_at).slice(0, 19)}  ${row.subject}  ${waiting}`);
+    }
+
+    console.log('Replies go through the website staff inbox, which audits them; this command only reads.');
+}
+
 const [command, ...args] = process.argv.slice(2);
 
 console.log(`Using the ${Environment.db.backend} backend.`);
@@ -192,6 +301,12 @@ switch (command) {
         break;
     case 'find-alts':
         await findAlts(args);
+        break;
+    case 'send-notice':
+        await sendNotice(args);
+        break;
+    case 'tickets':
+        await tickets(args);
         break;
     default:
         fail(USAGE);
