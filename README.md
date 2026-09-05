@@ -104,14 +104,16 @@ against the configured backend, then deletes what it made.
 
 The registration columns (`email`, `email_normalized`, `registration_group`,
 `signup_agent_hash`, `playable_after`, plus the `signup_attempt` table and its
-indexes), and after them the `login_attempt` table and the
-`session_profile_account_id_timestamp_idx` index, were added to the sqlite
+indexes), then the `login_attempt` table and the
+`session_profile_account_id_timestamp_idx` index, and then the message centre
+(`account_message`, `ticket`, `ticket_message`, `staff_action`, their indexes,
+and `report.reporter_account_id`/`report.world`), were added to the sqlite
 baseline **in place**, editing `20251229170623_clean` rather than adding a
 migration after it. That is deliberate: `ec2-setup/build.sh` seeds a new host
 from exactly one migration directory, so sqlite has to stay a single file.
 mysql, which has no such constraint, got the additive
-`20260904000000_registration_columns` and `20260905000000_website_login`
-instead.
+`20260904000000_registration_columns`, `20260905000000_website_login` and
+`20260906000000_message_centre` instead.
 
 The cost is that a `db.sqlite` created before an edit is **silently** left
 behind. prisma 6 records the baseline's checksum but does not compare it on
@@ -148,8 +150,8 @@ that predates the registration columns wants those two statements edited and
 the values back-filled.
 
 The postgres side has no baseline problem: `0_init` was never edited, and the
-later changes are their own migrations, `1_register_caps` and
-`2_website_login`.
+later changes are their own migrations, `1_register_caps`,
+`2_website_login` and `3_message_centre`.
 
 ## Dependencies
 

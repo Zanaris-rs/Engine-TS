@@ -155,7 +155,9 @@ CREATE TABLE "report" (
     "timestamp" DATETIME NOT NULL,
     "coord" INTEGER NOT NULL,
     "offender" TEXT NOT NULL,
-    "reason" INTEGER NOT NULL
+    "reason" INTEGER NOT NULL,
+    "reporter_account_id" INTEGER,
+    "world" INTEGER
 );
 
 -- CreateTable
@@ -164,6 +166,49 @@ CREATE TABLE "input_report" (
     "session_uuid" TEXT NOT NULL,
     "timestamp" DATETIME NOT NULL,
     "data" BLOB NOT NULL
+);
+
+-- CreateTable
+CREATE TABLE "account_message" (
+    "id" INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+    "account_id" INTEGER NOT NULL,
+    "ticket_id" INTEGER,
+    "kind" TEXT NOT NULL,
+    "subject" TEXT NOT NULL,
+    "body" TEXT NOT NULL,
+    "created_by_account_id" INTEGER,
+    "created_at" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "read_at" DATETIME
+);
+
+-- CreateTable
+CREATE TABLE "ticket" (
+    "id" INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+    "account_id" INTEGER NOT NULL,
+    "kind" TEXT NOT NULL,
+    "subject" TEXT NOT NULL,
+    "status" TEXT NOT NULL DEFAULT 'open',
+    "created_at" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updated_at" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+-- CreateTable
+CREATE TABLE "ticket_message" (
+    "id" INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+    "ticket_id" INTEGER NOT NULL,
+    "author_account_id" INTEGER NOT NULL,
+    "from_staff" BOOLEAN NOT NULL DEFAULT false,
+    "body" TEXT NOT NULL,
+    "created_at" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+-- CreateTable
+CREATE TABLE "staff_action" (
+    "id" INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+    "actor_account_id" INTEGER NOT NULL,
+    "action" TEXT NOT NULL,
+    "target" TEXT NOT NULL,
+    "created_at" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
 -- CreateIndex
@@ -192,3 +237,19 @@ CREATE INDEX "login_attempt_ip_created_at_idx" ON "login_attempt"("ip", "created
 
 -- CreateIndex
 CREATE INDEX "session_profile_account_id_timestamp_idx" ON "session"("profile", "account_id", "timestamp" DESC);
+
+-- CreateIndex
+CREATE INDEX "account_message_account_id_read_at_idx" ON "account_message"("account_id", "read_at");
+
+-- CreateIndex
+CREATE INDEX "account_message_account_id_created_at_idx" ON "account_message"("account_id", "created_at" DESC);
+
+-- CreateIndex
+CREATE INDEX "ticket_account_id_updated_at_idx" ON "ticket"("account_id", "updated_at" DESC);
+
+-- CreateIndex
+CREATE INDEX "ticket_status_updated_at_idx" ON "ticket"("status", "updated_at" DESC);
+
+-- CreateIndex
+CREATE INDEX "ticket_message_ticket_id_created_at_idx" ON "ticket_message"("ticket_id", "created_at");
+

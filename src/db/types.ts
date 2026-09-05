@@ -26,6 +26,17 @@ export type account_login = {
     logged_out: Generated<number>;
     logout_time: Timestamp | null;
 };
+export type account_message = {
+    id: Generated<number>;
+    account_id: number;
+    ticket_id: number | null;
+    kind: string;
+    subject: string;
+    body: string;
+    created_by_account_id: number | null;
+    created_at: Generated<Timestamp>;
+    read_at: Timestamp | null;
+};
 export type friendlist = {
     account_id: number;
     friend_account_id: number;
@@ -92,6 +103,8 @@ export type report = {
     coord: number;
     offender: string;
     reason: number;
+    reporter_account_id: number | null;
+    world: number | null;
 };
 export type session = {
     uuid: string;
@@ -128,9 +141,34 @@ export type signup_attempt = {
     ip_group: string;
     created_at: Generated<Timestamp>;
 };
+export type staff_action = {
+    id: Generated<number>;
+    actor_account_id: number;
+    action: string;
+    target: string;
+    created_at: Generated<Timestamp>;
+};
+export type ticket = {
+    id: Generated<number>;
+    account_id: number;
+    kind: string;
+    subject: string;
+    status: Generated<string>;
+    created_at: Generated<Timestamp>;
+    updated_at: Generated<Timestamp>;
+};
+export type ticket_message = {
+    id: Generated<number>;
+    ticket_id: number;
+    author_account_id: number;
+    from_staff: Generated<boolean>;
+    body: string;
+    created_at: Generated<Timestamp>;
+};
 export type DB = {
     account: account;
     account_login: account_login;
+    account_message: account_message;
     friendlist: friendlist;
     hiscore: hiscore;
     hiscore_large: hiscore_large;
@@ -145,4 +183,7 @@ export type DB = {
     session_log: session_log;
     session_wealth: session_wealth;
     signup_attempt: signup_attempt;
+    staff_action: staff_action;
+    ticket: ticket;
+    ticket_message: ticket_message;
 };

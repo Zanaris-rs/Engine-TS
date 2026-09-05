@@ -187,6 +187,11 @@ model report {
     coord    Int
     offender String
     reason   Int
+
+    // who pressed Report Abuse, and on which world. Null on the rows written
+    // before the login server took the packet over from the (disabled) logger.
+    reporter_account_id Int?
+    world               Int?
 }
 
 model input_report {
@@ -196,4 +201,80 @@ model input_report {
     timestamp    DateTime
 
     data Bytes
+}
+
+// ---------------------------------------------------------------------------
+// the message centre
+// ---------------------------------------------------------------------------
+//
+// One unread rule everywhere, and it is a cross-repo contract pinned in
+// test/fixtures/message-centre-contract.json:
+//
+//     count(*) from account_message where account_id = $1 and read_at is null
+//
+// which is both the number the login server puts on the client's welcome
+// screen and the number the website's Message Centre shows. No foreign keys,
+// like every other table here; the SQL API in
+// prisma/postgres/migrations/3_message_centre owns the rules the website is
+// allowed to rely on.
+
+model account_message {
+    id Int @id @default(autoincrement())
+
+    // ticket_id is null for a standalone notice and set when a staff reply
+    // lands on a ticket; kind is welcome | notice | ban | mute | reply;
+    // created_by_account_id is null when the system wrote the row rather than
+    // a person.
+    account_id            Int
+    ticket_id             Int?
+    kind                  String
+    subject               String
+    body                  String
+    created_by_account_id Int?
+
+    created_at DateTime  @default(now())
+    read_at    DateTime?
+
+    @@index([account_id, read_at])
+    @@index([account_id, created_at(sort: Desc)])
+}
+
+model ticket {
+    id Int @id @default(autoincrement())
+
+    // kind is bug | appeal | other, status is open | closed
+    account_id Int
+    kind       String
+    subject    String
+    status     String @default("open")
+
+    created_at DateTime @default(now())
+    updated_at DateTime @default(now())
+
+    @@index([account_id, updated_at(sort: Desc)])
+    @@index([status, updated_at(sort: Desc)])
+}
+
+model ticket_message {
+    id Int @id @default(autoincrement())
+
+    ticket_id         Int
+    author_account_id Int
+    from_staff        Boolean @default(false)
+    body              String
+
+    created_at DateTime @default(now())
+
+    @@index([ticket_id, created_at])
+}
+
+model staff_action {
+    id Int @id @default(autoincrement())
+
+    // action names the staff function that ran, target what it acted on
+    actor_account_id Int
+    action           String
+    target           String
+
+    created_at DateTime @default(now())
 }
