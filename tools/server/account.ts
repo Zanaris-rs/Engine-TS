@@ -6,7 +6,7 @@
  *   npm run account -- reset-password <name> <newpassword>
  *   npm run account -- ban-ip <ip>
  *   npm run account -- find-alts <email|ip|ip-group>
- *   npm run account -- send-notice <name> <subject> <body>
+ *   npm run account -- send-notice <name> <subject> <body> [--from <staff>]
  *   npm run account -- tickets [open|closed|all]
  *
  * With account.autoCreate off there is no other way to make the first account,
@@ -29,7 +29,7 @@ const USAGE = `Usage:
   account.ts reset-password <name> <newpassword>
   account.ts ban-ip <ip>
   account.ts find-alts <email|ip|ip-group>
-  account.ts send-notice <name> <subject> <body>
+  account.ts send-notice <name> <subject> <body> [--from <staff>]
   account.ts tickets [open|closed|all]`;
 
 function fail(message: string): never {
@@ -195,20 +195,35 @@ async function sendNotice(args: string[]) {
     const fromIndex = args.indexOf('--from');
     const from = fromIndex === -1 ? null : args[fromIndex + 1];
     const rest = fromIndex === -1 ? args : [...args.slice(0, fromIndex), ...args.slice(fromIndex + 2)];
-    const [name, subject, body] = rest;
 
-    if (!name || !subject || !body) {
+    // a trailing `--from` used to be dropped silently, and the notice went out
+    // signed by nobody - the one thing the flag exists to prevent
+    if (fromIndex !== -1 && !from) {
+        fail(`--from needs a staff username.\n\n${USAGE}`);
+    }
+
+    const [name, rawSubject, rawBody] = rest;
+
+    if (!name || !rawSubject || !rawBody) {
         fail(USAGE);
     }
 
     // the same caps the SQL API enforces, so a notice sent here cannot be one
-    // the website would have refused
-    if (subject.length > 120) {
-        fail(`The subject is ${subject.length} characters; the cap is 120.`);
+    // the website would have refused. Measured before trimming and stored
+    // after, exactly as accounts.staff_notice does it.
+    if (rawSubject.length > 120) {
+        fail(`The subject is ${rawSubject.length} characters; the cap is 120.`);
     }
 
-    if (body.length > 4000) {
-        fail(`The body is ${body.length} characters; the cap is 4000.`);
+    if (rawBody.length > 4000) {
+        fail(`The body is ${rawBody.length} characters; the cap is 4000.`);
+    }
+
+    const subject = rawSubject.trim();
+    const body = rawBody.trim();
+
+    if (subject.length === 0 || body.length === 0) {
+        fail('A notice needs a subject and a body; whitespace is not one.');
     }
 
     const username = resolveUsername(name, true);
@@ -239,12 +254,17 @@ async function sendNotice(args: string[]) {
         })
         .execute();
 
-    // Same row accounts.staff_notice writes, so /staff/reports and any later
-    // audit sees a notice sent from the shell exactly as it sees one sent from
-    // the site. Only when a person is named: an unattributed notice is the
-    // system talking, and there is no actor to record.
+    // The audit row /staff/reports reads, so a notice sent from the shell is
+    // as visible as one sent from the site. Only when a person is named: an
+    // unattributed notice is the system talking, and there is no actor.
+    //
+    // 'staff_notice_cli', not 'staff_notice': the website's function counts
+    // its own action name over the last hour for its 20-per-actor throttle, so
+    // sharing the name would let shell notices - which are not rate limited,
+    // and cannot be, since whoever runs this has the database - quietly spend
+    // a moderator's website allowance. It also says which door it came in by.
     if (author) {
-        await db.insertInto('staff_action').values({ actor_account_id: author.id, action: 'staff_notice', target: account.username }).execute();
+        await db.insertInto('staff_action').values({ actor_account_id: author.id, action: 'staff_notice_cli', target: account.username }).execute();
     }
 
     const unread = await db
@@ -314,7 +334,9 @@ async function tickets(args: string[]) {
         // either, and String(aDate) would have printed a local-time sentence
         const updated = fromDbDate(row.updated_at).toISOString().slice(0, 19).replace('T', ' ');
 
-        console.log(`  ${String(row.id).padStart(6)}  ${row.status.padEnd(6)}  ${row.kind.padEnd(6)}  ${row.username.padEnd(12)}  ${updated}  ${row.subject}  ${waiting}`);
+        // the display name, as send-notice prints it: 'mod_matt' is stored,
+        // 'Mod Matt' is what staff see everywhere else
+        console.log(`  ${String(row.id).padStart(6)}  ${row.status.padEnd(6)}  ${row.kind.padEnd(6)}  ${toDisplayName(row.username).padEnd(12)}  ${updated}  ${row.subject}  ${waiting}`);
     }
 
     console.log('Replies go through the website staff inbox, which audits them; this command only reads.');
