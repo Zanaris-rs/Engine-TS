@@ -113,9 +113,19 @@ mysql, which has no such constraint, got the additive
 `20260904000000_registration_columns` and `20260905000000_website_login`
 instead.
 
-The cost is that the file's checksum changed, so a `db.sqlite` created before
-this branch fails `prisma migrate deploy` with a **"migration modified after it
-was applied"** error. Two ways out:
+The cost is that a `db.sqlite` created before an edit is **silently** left
+behind. prisma 6 records the baseline's checksum but does not compare it on
+deploy, so `npm run sqlite:migrate` and `prisma migrate status` both say the
+database is up to date while the tables the edit added are simply not there.
+Nothing fails, which is why it is worth checking by hand:
+
+```bash
+npx prisma migrate diff --from-url file:db.sqlite \
+    --to-schema-datamodel prisma/singleworld/schema.prisma --script
+```
+
+`-- This is an empty migration.` means the database is in step. Anything else
+is exactly what it is missing, and there are two ways out:
 
 ```bash
 # 1. dev databases: throw it away and migrate from scratch
@@ -123,20 +133,19 @@ rm db.sqlite && npm run sqlite:migrate
 ```
 
 ```bash
-# 2. a database with data in it: apply the new columns by hand, then tell
-#    prisma the baseline is already applied at its new checksum
-sqlite3 db.sqlite < <the ALTER TABLE / CREATE TABLE statements>
-npx prisma migrate resolve --applied 20251229170623_clean \
-    --schema prisma/singleworld/schema.prisma
+# 2. a database with data in it: apply the catch-up statements
+npx prisma migrate diff --from-url file:db.sqlite \
+    --to-schema-datamodel prisma/singleworld/schema.prisma --script \
+    | sqlite3 db.sqlite
 ```
 
-For option 2 the statements to run are the `email`, `email_normalized`,
-`registration_group`, `signup_agent_hash` and `playable_after` columns as
-`ALTER TABLE account ADD COLUMN ...`, then the `signup_attempt` and
-`login_attempt` tables and the eight indexes — all of them visible in the diff
-of that migration. `email` and `email_normalized` are `NOT NULL` with no
-default, so an existing table needs them added with `DEFAULT ''` (sqlite's
-`ALTER TABLE ADD COLUMN` requires it) and back-filled.
+The `_prisma_migrations` row needs no fixing up afterwards: the baseline is
+already recorded as applied under its old checksum, and `migrate resolve
+--applied` refuses (`P3008`) for that reason. Only new columns that are `NOT
+NULL` with no default need care — `email` and `email_normalized` are, and
+sqlite's `ALTER TABLE ADD COLUMN` demands a `DEFAULT ''` for them, so a table
+that predates the registration columns wants those two statements edited and
+the values back-filled.
 
 The postgres side has no baseline problem: `0_init` was never edited, and the
 later changes are their own migrations, `1_register_caps` and
