@@ -30,6 +30,14 @@ CREATE TABLE "signup_attempt" (
 );
 
 -- CreateTable
+CREATE TABLE "login_attempt" (
+    "id" INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+    "username" TEXT NOT NULL,
+    "ip" TEXT NOT NULL,
+    "created_at" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+-- CreateTable
 CREATE TABLE "account_login" (
     "account_id" INTEGER NOT NULL,
     "profile" TEXT NOT NULL,
@@ -176,3 +184,11 @@ CREATE INDEX "signup_attempt_ip_created_at_idx" ON "signup_attempt"("ip", "creat
 -- CreateIndex
 CREATE INDEX "signup_attempt_ip_group_created_at_idx" ON "signup_attempt"("ip_group", "created_at");
 
+-- CreateIndex
+CREATE INDEX "login_attempt_username_created_at_idx" ON "login_attempt"("username", "created_at");
+
+-- CreateIndex
+CREATE INDEX "login_attempt_ip_created_at_idx" ON "login_attempt"("ip", "created_at");
+
+-- CreateIndex
+CREATE INDEX "session_profile_account_id_timestamp_idx" ON "session"("profile", "account_id", "timestamp" DESC);

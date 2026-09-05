@@ -47,6 +47,16 @@ model signup_attempt {
     @@index([ip_group, created_at])
 }
 
+model login_attempt {
+    id         Int      @id @default(autoincrement())
+    username   String
+    ip         String
+    created_at DateTime @default(now())
+
+    @@index([username, created_at])
+    @@index([ip, created_at])
+}
+
 model account_login {
     account_id Int
     profile    String
@@ -114,6 +124,8 @@ model session {
 
     uid Int
     ip  String?
+
+    @@index([profile, account_id, timestamp(sort: Desc)])
 }
 
 model session_log {
