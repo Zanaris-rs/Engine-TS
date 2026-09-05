@@ -10,6 +10,22 @@
  */
 
 /**
+ * A capture has started.
+ *
+ * Sent unconditionally the moment the world opens one, ahead of any chunk and
+ * even when there will be no chunks at all - an offender who logged in a minute
+ * ago has an empty ring, and a Java client sends one move record per packet. It
+ * is what the before-window chat copy hangs off, so evidence does not depend on
+ * the offender having moved their mouse.
+ */
+export interface EvidenceBeginMessage {
+    type: 'evidence_begin';
+    report_uuid: string;
+    report_at: number;
+    offender_account_id: number | null;
+}
+
+/**
  * One finished chunk of a player's input.
  *
  * `kind` is the sort of evidence - only input travels this way today - and
@@ -18,10 +34,10 @@
  * it), `live` for one recorded after. `capture` is what `report_input.kind`
  * stores.
  *
- * `report_at` and `offender_account_id` ride along because the logger copies
- * the offender's chat around the report, and has nothing else to resolve either
- * from. `seq` orders the chunks of one report; `data` is base64 of the engine's
- * own record framing, decoded by the website and by nothing else.
+ * `report_at` and `offender_account_id` ride along because every message about
+ * a report has to stand on its own - the logger never asks the login server
+ * anything. `seq` orders the chunks of one report; `data` is base64 of the
+ * engine's own record framing, decoded by the website and by nothing else.
  */
 export interface ReportEvidenceMessage {
     type: 'report_evidence';
@@ -50,4 +66,4 @@ export interface EvidenceEndMessage {
     ended_at: number;
 }
 
-export type EvidenceMessage = ReportEvidenceMessage | EvidenceEndMessage;
+export type EvidenceMessage = EvidenceBeginMessage | ReportEvidenceMessage | EvidenceEndMessage;

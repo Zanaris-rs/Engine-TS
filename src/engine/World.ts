@@ -105,6 +105,19 @@ import Midi from '#/cache/midi/Midi.js';
 
 const priv = forge.pki.privateKeyFromPem(fs.readFileSync('data/config/private.pem', 'ascii'));
 
+/**
+ * What a capture attempt did: the report's evidence key, whether this call is
+ * what opened it, whether the window moved, and when it now closes. `::track`
+ * reads it so a moderator is told the truth about a capture somebody else
+ * already started.
+ */
+export type InputCaptureResult = {
+    uuid: string;
+    started: boolean;
+    extended: boolean;
+    endsAt: number;
+};
+
 type LogoutRequest = {
     save: Uint8Array;
     lastAttempt: number;
@@ -2425,14 +2438,15 @@ class World {
      * minutes of mouse movement is six times the rows for no more information,
      * so the later reports point at the first one's evidence.
      */
-    notifyPlayerReport(player: Player, offender: string, reason: ReportAbuseReason, trackMs: number = World.REPORT_TRACK_MS) {
+    notifyPlayerReport(player: Player, offender: string, reason: ReportAbuseReason, trackMs: number = World.REPORT_TRACK_MS): InputCaptureResult | null {
         const now = Date.now();
         const offenderPlayer = this.getPlayerByUsername(offender);
         const wanted = reason === ReportAbuseReason.MACROING || reason === ReportAbuseReason.BUG_ABUSE;
 
         // the ring already holds the minutes before this moment; the tail
         // records the ones after it
-        const uuid = wanted && offenderPlayer ? this.captureInput(offender, offenderPlayer, now, trackMs) : null;
+        const capture = wanted && offenderPlayer ? this.captureInput(offender, offenderPlayer, now, trackMs) : null;
+        const uuid = capture ? capture.uuid : null;
 
         // to the login thread, not the logger: the logger server is disabled on
         // this fleet, so every report used to be dropped while the player was
@@ -2452,6 +2466,8 @@ class World {
             offender_session_uuid: offenderPlayer ? offenderPlayer.session : null,
             offender_coord: offenderPlayer ? offenderPlayer.coord : null
         });
+
+        return capture;
     }
 
     /**
@@ -2464,11 +2480,30 @@ class World {
      * after it, so a bot raid reporting itself cannot turn one world into a
      * chunk-a-second writer.
      */
-    private captureInput(offender: string, player: Player, now: number, trackMs: number): string {
+    private captureInput(offender: string, player: Player, now: number, trackMs: number): InputCaptureResult {
         const running = this.inputCaptures.get(offender);
 
         if (running) {
-            return running.uuid;
+            // a second report on somebody already being watched moves the end
+            // of the window they already have; it never shortens it, so a
+            // one-minute ::track cannot cut a fifteen-minute report short
+            const endsAt = Math.max(running.endsAt, now + trackMs);
+            const extended = endsAt > running.endsAt;
+
+            running.endsAt = endsAt;
+
+            if (running.live) {
+                if (player.input.isTracked()) {
+                    player.input.extend(endsAt);
+                } else {
+                    // the offender relogged, or their tail ran out before the
+                    // window did: point the new ring at the report that is
+                    // already open rather than starting a second one
+                    player.input.track(endsAt, { uuid: running.uuid, reportAt: running.reportAt, accountId: running.accountId });
+                }
+            }
+
+            return { uuid: running.uuid, started: false, extended, endsAt };
         }
 
         let live = 0;
@@ -2485,16 +2520,29 @@ class World {
         };
 
         const tail = live < World.MAX_LIVE_CAPTURES;
+        const endsAt = now + trackMs;
 
-        this.inputCaptures.set(offender, { ...capture, endsAt: now + trackMs, live: tail });
+        this.inputCaptures.set(offender, { ...capture, endsAt, live: tail });
+
+        // unconditionally, and before any chunk: the before-window chat is
+        // worth keeping even for an offender whose ring is empty - somebody who
+        // just logged in, or a Java client that sends one move record a packet -
+        // and a capture that produced no chunk at all would otherwise leave no
+        // trace on the logger side whatsoever.
+        this.loggerThread?.postMessage({
+            type: 'evidence_begin',
+            report_uuid: capture.uuid,
+            report_at: capture.reportAt,
+            offender_account_id: capture.accountId
+        });
 
         if (tail) {
-            player.input.track(now + trackMs, capture);
+            player.input.track(endsAt, capture);
         } else {
             player.input.dumpRing(capture);
         }
 
-        return capture.uuid;
+        return { uuid: capture.uuid, started: true, extended: true, endsAt };
     }
 
     /**
@@ -2503,16 +2551,15 @@ class World {
      * has no after-window worth copying.
      */
     stopInputCapture(offender: string): boolean {
+        const had = this.inputCaptures.delete(offender);
         const player = this.getPlayerByUsername(offender);
+        const running = player ? player.input.isTracked() : false;
 
-        this.inputCaptures.delete(offender);
+        player?.input.untrack();
 
-        if (!player) {
-            return false;
-        }
-
-        player.input.untrack();
-        return true;
+        // false means there was nothing to stop, which is a different thing to
+        // say to a moderator than "stopped"
+        return had || running;
     }
 
     /**

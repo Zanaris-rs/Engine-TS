@@ -184,25 +184,36 @@ the moment that caused it.
 When a macro or bug-abuse report lands (or a moderator types
 `::track <name> [minutes]`), the world generates a uuid and:
 
+- tells the logger a capture has started, which is what makes it copy the
+  offender's chat for the 30 minutes leading up to the report. That message
+  goes out whether or not there is any input to go with it - somebody who
+  logged in a minute ago has an empty ring, and chat is evidence either way;
 - submits the whole ring, oldest chunk first, as the **before** window;
 - runs a 15-minute **live tail**, submitting each chunk as it rotates;
-- has the logger server copy the offender's own chat - what they said out loud
-  and the private messages they sent, never what was said to them - for 30
-  minutes before the report and the length of the tail after it.
+- copies the chat from the other side of the report when the window closes.
 
-One capture per offender per window (six people reporting the same macroer get
-one copy of the evidence, not six) and five live tails per world; past that a
-report still gets the ring and no tail. The framing itself is a cross-repo
-contract, pinned in `test/fixtures/input-tracking-contract.json` and decoded by
-the website.
+Only the offender's own words are copied: what they said out loud and the
+private messages they sent, never what was said to them.
+
+One capture per offender per window - six people reporting the same macroer get
+one copy of the evidence, not six, and a second report extends the window
+rather than opening a second capture over the same minutes - and five live
+tails per world; past that a report still gets the ring and no tail. The
+framing itself is a cross-repo contract, pinned in
+`test/fixtures/input-tracking-contract.json` and decoded by the website.
 
 Chat is swept hourly by the friend server, an hour after it was said. The
 evidence copy is what keeps any of it.
 
 ### Running the logger in dev
 
-The evidence goes to the **logger server**, which has to be running or the
-chunks are dropped:
+The evidence goes to the **logger server**. A world that cannot reach it holds
+what it could not send - at most 32 messages, retried every 15 seconds, dropped
+after 5 minutes - so a restart during a deploy costs nothing and a logger that
+stays down costs the tail of whatever was being captured. Everything else
+(session logs, wealth events) is fire-and-forget and simply lost.
+
+Run it alongside the others:
 
 ```sh
 npm run logger   # alongside npm run login, npm run friend and npm run dev
@@ -220,6 +231,10 @@ about 86,000 rows a day at thirty players, read by nothing. Reports, evidence
 and wealth events are not behind it; only that firehose is. With
 `logger.enabled` false the world creates no logger thread at all and builds no
 batches for it.
+
+The logger binds `0.0.0.0`, exactly as the login and friend servers do, and is
+kept private by the security group rather than by the bind address; worlds on
+other hosts reach it over the fleet's WireGuard link. Do not expose 43501.
 
 ## Dependencies
 

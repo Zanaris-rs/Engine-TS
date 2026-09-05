@@ -30,7 +30,11 @@ const pending: Map<string, { message: EvidenceMessage; firstTried: number }> = n
 
 /** One key per thing that can be written once: a chunk, or the end of a window. */
 function evidenceKey(message: EvidenceMessage): string {
-    return message.type === 'report_evidence' ? `${message.report_uuid}:${message.seq}` : `${message.report_uuid}:end`;
+    if (message.type === 'report_evidence') {
+        return `${message.report_uuid}:${message.seq}`;
+    }
+
+    return `${message.report_uuid}:${message.type === 'evidence_begin' ? 'begin' : 'end'}`;
 }
 
 async function sendEvidence(message: EvidenceMessage): Promise<void> {
@@ -57,33 +61,49 @@ async function sendEvidence(message: EvidenceMessage): Promise<void> {
     }
 }
 
-// the retry loop has no caller to catch for it, so it catches for itself
-setInterval(async () => {
-    try {
-        if (pending.size === 0) {
-            return;
-        }
-
-        const now = Date.now();
-
-        for (const [key, held] of pending) {
-            if (now - held.firstTried >= PENDING_TTL) {
-                pending.delete(key);
-                continue;
-            }
-
-            if (await client.evidence(held.message)) {
-                pending.delete(key);
-            } else {
-                // the socket is still down; the rest of the queue will not fare
-                // any better this time round
-                break;
-            }
-        }
-    } catch (err) {
-        console.error(err);
+async function retryPending(): Promise<void> {
+    if (pending.size === 0) {
+        return;
     }
-}, RETRY_INTERVAL).unref();
+
+    const now = Date.now();
+
+    for (const [key, held] of pending) {
+        if (now - held.firstTried >= PENDING_TTL) {
+            pending.delete(key);
+            continue;
+        }
+
+        if (await client.evidence(held.message)) {
+            pending.delete(key);
+        } else {
+            // the socket is still down; the rest of the queue will not fare
+            // any better this time round
+            break;
+        }
+    }
+}
+
+/**
+ * Re-armed rather than an interval, so two rounds can never overlap: a round
+ * that spends thirty seconds waiting on a dead socket would otherwise have a
+ * second one walking the same map behind it, sending everything twice.
+ *
+ * It has no caller to catch for it, so it catches for itself.
+ */
+function scheduleRetry(): void {
+    setTimeout(async () => {
+        try {
+            await retryPending();
+        } catch (err) {
+            console.error(err);
+        } finally {
+            scheduleRetry();
+        }
+    }, RETRY_INTERVAL).unref();
+}
+
+scheduleRetry();
 
 parentPort.on('message', async msg => {
     try {
@@ -127,6 +147,7 @@ async function handleRequests(_parentPort: ParentPort, msg: any) {
         //
         // no 'input_track' case either: it wrote `input_report`, which nothing
         // has ever read. Report evidence is the two messages below.
+        case 'evidence_begin':
         case 'report_evidence':
         case 'evidence_end': {
             if (Environment.logger.enabled) {

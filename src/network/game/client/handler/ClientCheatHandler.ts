@@ -34,8 +34,12 @@ import { ReportAbuseReason } from '#/network/game/client/model/ReportAbuse.js';
 import { LoggerEventType } from '#/server/logger/LoggerEventType.js';
 
 import Environment from '#/util/Environment.js';
+import { toSafeName } from '#/util/JString.js';
 import { printDebug } from '#/util/Logger.js';
 import { tryParseInt } from '#/util/TryParse.js';
+
+/** `::track <name>` with no number. Long enough to see a pattern, short enough to forget about. */
+const TRACK_DEFAULT_MINUTES = 15;
 
 export default class ClientCheatHandler extends ClientGameMessageHandler<ClientCheat> {
     handle(message: ClientCheat, player: Player): boolean {
@@ -699,14 +703,21 @@ export default class ClientCheatHandler extends ClientGameMessageHandler<ClientC
                     return false;
                 }
 
-                const username = args[0];
-                const minutes = args.length > 1 ? Math.max(0, tryParseInt(args[1], 15)) : 15;
+                // the same key Report Abuse and a relayed track use:
+                // fromBase37 hands those two a safe name, and a moderator typing
+                // 'Mod Matt' must land on the same capture as they do or the
+                // dedupe opens a second one over the same minutes
+                const username = toSafeName(args[0]);
+
+                // a day is longer than any watch anybody has ever wanted, and
+                // longer than the evidence retention makes sense over
+                const minutes = args.length > 1 ? Math.min(24 * 60, Math.max(0, tryParseInt(args[1], TRACK_DEFAULT_MINUTES))) : TRACK_DEFAULT_MINUTES;
 
                 if (minutes === 0) {
                     if (World.stopInputCapture(username)) {
                         player.messageGame(`No longer tracking '${username}'.`);
                     } else {
-                        player.messageGame(`Player '${username}' does not exist or is not logged in.`);
+                        player.messageGame(`'${username}' was not being tracked.`);
                     }
 
                     return true;
@@ -722,8 +733,22 @@ export default class ClientCheatHandler extends ClientGameMessageHandler<ClientC
                 // through the report path, not around it: the point is that the
                 // evidence turns up on /staff/reports like any other macro
                 // report, with this moderator's name on it as the reporter
-                World.notifyPlayerReport(player, username, ReportAbuseReason.MACROING, minutes * 60 * 1000);
-                player.messageGame(`Tracking '${username}' for ${minutes} minutes.`);
+                const capture = World.notifyPlayerReport(player, username, ReportAbuseReason.MACROING, minutes * 60 * 1000);
+
+                if (!capture) {
+                    player.messageGame(`Could not start a capture on '${username}'.`);
+                    return false;
+                }
+
+                const remaining = Math.max(1, Math.round((capture.endsAt - Date.now()) / 60000));
+
+                if (capture.started) {
+                    player.messageGame(`Tracking '${username}' for ${remaining} minutes.`);
+                } else if (capture.extended) {
+                    player.messageGame(`Already tracking '${username}' - window extended to ${remaining} minutes.`);
+                } else {
+                    player.messageGame(`Already tracking '${username}', for another ${remaining} minutes.`);
+                }
             }
         }
 
