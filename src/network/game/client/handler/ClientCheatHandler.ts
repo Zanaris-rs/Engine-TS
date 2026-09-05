@@ -41,6 +41,9 @@ import { tryParseInt } from '#/util/TryParse.js';
 /** `::track <name>` with no number. Long enough to see a pattern, short enough to forget about. */
 const TRACK_DEFAULT_MINUTES = 15;
 
+/** ...and the most a moderator may ask for in one go. See the note at the call. */
+const TRACK_MAX_MINUTES = 60;
+
 export default class ClientCheatHandler extends ClientGameMessageHandler<ClientCheat> {
     handle(message: ClientCheat, player: Player): boolean {
         if (message.input.length > 80) {
@@ -714,9 +717,14 @@ export default class ClientCheatHandler extends ClientGameMessageHandler<ClientC
                 // dedupe opens a second one over the same minutes
                 const username = toSafeName(args[0]);
 
-                // a day is longer than any watch anybody has ever wanted, and
-                // longer than the evidence retention makes sense over
-                const minutes = args.length > 1 ? Math.min(24 * 60, Math.max(0, tryParseInt(args[1], TRACK_DEFAULT_MINUTES))) : TRACK_DEFAULT_MINUTES;
+                // An hour. The old ceiling was a day, which is not a watch -
+                // it is a recording, at up to a chunk a minute per offender,
+                // held open by a moderator who typed a number and went to bed.
+                // A macro report watches for fifteen minutes and a relayed
+                // track for thirty; an hour is already four times the first and
+                // twice the second, and a watch worth more than that is worth
+                // typing `::track` again.
+                const minutes = args.length > 1 ? Math.min(TRACK_MAX_MINUTES, Math.max(0, tryParseInt(args[1], TRACK_DEFAULT_MINUTES))) : TRACK_DEFAULT_MINUTES;
 
                 if (minutes === 0) {
                     if (World.stopInputCapture(username)) {

@@ -9,7 +9,7 @@
  *   npm run account -- send-notice <name> <subject> <body> [--from <staff>]
  *   npm run account -- tickets [open|closed|all]
  *   npm run account -- punishments [name]
- *   npm run account -- lift <name> [--from <staff>]
+ *   npm run account -- lift <name> [--kind ban|mute] [--from <staff>]
  *
  * With account.autoCreate off there is no other way to make the first account,
  * and with no mailer there is no other way to recover a lost password. The two
@@ -27,7 +27,8 @@ import * as bcrypt from 'bcrypt-ts';
 
 import { fromDbDate } from '#/db/DateFormat.js';
 import { db, toDbDate } from '#/db/query.js';
-import { liftPunishmentsQuery, NOTICE_KIND, punishmentsQuery } from '#/server/login/MessageCentre.js';
+import { liftPunishmentsQuery, NOTICE_KIND, PUNISHMENT_KINDS, punishmentsQuery } from '#/server/login/MessageCentre.js';
+import type { PunishmentKind } from '#/server/login/MessageCentre.js';
 import { checkPassword, checkUsername, ipGroup, isValidEmail, normalizeEmail } from '#/util/Account.js';
 import Environment from '#/util/Environment.js';
 import { toDisplayName, toSafeName } from '#/util/JString.js';
@@ -40,7 +41,9 @@ const USAGE = `Usage:
   account.ts send-notice <name> <subject> <body> [--from <staff>]
   account.ts tickets [open|closed|all]
   account.ts punishments [name]
-  account.ts lift <name> [--from <staff>]`;
+  account.ts lift <name> [--kind ban|mute] [--from <staff>]
+
+  --kind    which half to undo; both when it is not given, and always printed`;
 
 function fail(message: string): never {
     console.error(message);
@@ -84,6 +87,32 @@ function takeFrom(args: string[]): { from: string | null; rest: string[] } {
     }
 
     return { from: from ?? null, rest };
+}
+
+/**
+ * `--kind ban` or `--kind mute`, or neither, which means both.
+ *
+ * Both is the default because it is what `lift` has always done and what an
+ * operator undoing a bad automated punishment wants. One is here because "unban
+ * this player, the mute stands" is a real decision, and until now the only way
+ * to take it from a shell was to lift everything and re-mute - which writes a
+ * second punishment row and tells /bans a second decision was made.
+ */
+function takeKind(args: string[]): { kinds: readonly PunishmentKind[]; rest: string[] } {
+    const index = args.indexOf('--kind');
+
+    if (index === -1) {
+        return { kinds: PUNISHMENT_KINDS, rest: args };
+    }
+
+    const value = args[index + 1];
+    const rest = [...args.slice(0, index), ...args.slice(index + 2)];
+
+    if (!value || !PUNISHMENT_KINDS.includes(value as PunishmentKind)) {
+        fail(`--kind is ${PUNISHMENT_KINDS.join(' or ')}.\n\n${USAGE}`);
+    }
+
+    return { kinds: [value as PunishmentKind], rest };
 }
 
 /** The account named by `--from`, or undefined when nobody was named. */
@@ -426,9 +455,15 @@ async function punishments(args: string[]) {
  * Only punishments still in force are stamped. One that already expired was
  * not lifted by anybody, and saying otherwise would credit a moderator with
  * the passage of time.
+ *
+ * `--kind` narrows it to one of the two. Which kinds are being lifted is
+ * printed either way, including when nothing was passed: this command reverses
+ * a decision on somebody's account, and "what did that just do" should not
+ * depend on remembering what the default is.
  */
 async function lift(args: string[]) {
-    const { from, rest } = takeFrom(args);
+    const { from, rest: withoutFrom } = takeFrom(args);
+    const { kinds, rest } = takeKind(withoutFrom);
     const [name] = rest;
 
     if (!name) {
@@ -444,12 +479,24 @@ async function lift(args: string[]) {
 
     const actor = await loadActor(from);
 
-    const was = [account.banned_until ? `banned until ${formatStamp(account.banned_until)}` : null, account.muted_until ? `muted until ${formatStamp(account.muted_until)}` : null].filter(Boolean).join(' and ');
+    const was = [kinds.includes('ban') && account.banned_until ? `banned until ${formatStamp(account.banned_until)}` : null, kinds.includes('mute') && account.muted_until ? `muted until ${formatStamp(account.muted_until)}` : null]
+        .filter(Boolean)
+        .join(' and ');
 
-    await db.updateTable('account').set({ banned_until: null, muted_until: null }).where('id', '=', account.id).execute();
+    // only the state for the kinds being lifted: a mute lifted on an account
+    // that is also banned must leave `banned_until` exactly where it was
+    const state: { banned_until?: null; muted_until?: null } = {};
+    if (kinds.includes('ban')) {
+        state.banned_until = null;
+    }
+    if (kinds.includes('mute')) {
+        state.muted_until = null;
+    }
+
+    await db.updateTable('account').set(state).where('id', '=', account.id).execute();
 
     const now = new Date();
-    const lifted = await liftPunishmentsQuery(db, account.id, toDbDate(now), actor?.id ?? null, now).executeTakeFirst();
+    const lifted = await liftPunishmentsQuery(db, account.id, toDbDate(now), actor?.id ?? null, now, kinds).executeTakeFirst();
 
     // the same audit row the website's staff_lift writes, and named for the
     // door it came in by - see the note on staff_notice_cli above
@@ -457,7 +504,7 @@ async function lift(args: string[]) {
         await db.insertInto('staff_action').values({ actor_account_id: actor.id, action: 'staff_lift_cli', target: account.username }).execute();
     }
 
-    console.log(`Lifted ${toDisplayName(account.username)} (id ${account.id})${actor ? ` as ${toDisplayName(actor.username)}` : ''}: ${was || 'nothing was in force'}.`);
+    console.log(`Lifting ${kinds.join(' and ')} for ${toDisplayName(account.username)} (id ${account.id})${actor ? ` as ${toDisplayName(actor.username)}` : ''}: ${was || 'nothing of that kind was in force'}.`);
     console.log(`${Number(lifted?.numUpdatedRows ?? 0)} punishment row(s) marked lifted. They stay on the public record; "lifted" is what changes.`);
 
     if (!actor) {

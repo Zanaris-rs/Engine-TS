@@ -270,8 +270,24 @@ test('lifting only touches punishments that are still in force', () => {
 
     // a ban that already expired was not lifted by anybody, and stamping it
     // would have the public page crediting a moderator with the calendar
-    assert.equal(plain(sql), 'update punishment set lifted_at = $1, lifted_by_account_id = $2 where account_id = $3 and lifted_at is null and (until is null or until > $4)');
-    assert.deepEqual(parameters, ['2026-09-06T14:33:00.000Z', 9, 7, now]);
+    assert.equal(plain(sql), 'update punishment set lifted_at = $1, lifted_by_account_id = $2 where account_id = $3 and kind in ($4, $5) and lifted_at is null and (until is null or until > $6)');
+    assert.deepEqual(parameters, ['2026-09-06T14:33:00.000Z', 9, 7, 'ban', 'mute', now]);
+});
+
+test('lifting one kind leaves the other standing', () => {
+    const now = new Date('2026-09-06T14:33:00.000Z');
+
+    // `account.ts lift <name> --kind ban`. Two decisions were taken about this
+    // player and only one is being undone, so the mute's punishment row must
+    // not be stamped - the public record would otherwise say a moderator
+    // reversed something they did not touch.
+    const { sql, parameters } = liftPunishmentsQuery(postgres, 7, '2026-09-06T14:33:00.000Z', 9, now, ['ban']).compile();
+
+    assert.equal(plain(sql), 'update punishment set lifted_at = $1, lifted_by_account_id = $2 where account_id = $3 and kind in ($4) and lifted_at is null and (until is null or until > $5)');
+    assert.deepEqual(parameters, ['2026-09-06T14:33:00.000Z', 9, 7, 'ban', now]);
+
+    // and the default is still both, spelled out rather than assumed
+    assert.deepEqual([...PUNISHMENT_KINDS], ['ban', 'mute']);
 });
 
 test('a spawn names the staff member, the recipient and the world', () => {
@@ -310,7 +326,7 @@ test('the lift is the same statement on sqlite, and lifted by nobody is null', (
     const now = new Date('2026-09-06T14:33:00.000Z');
     const { sql, parameters } = liftPunishmentsQuery(sqlite, 7, '2026-09-06 14:33:00', null, now).compile();
 
-    assert.equal(plain(sql), 'update punishment set lifted_at = ?, lifted_by_account_id = ? where account_id = ? and lifted_at is null and (until is null or until > ?)');
-    assert.deepEqual(parameters, ['2026-09-06 14:33:00', null, 7, now]);
+    assert.equal(plain(sql), 'update punishment set lifted_at = ?, lifted_by_account_id = ? where account_id = ? and kind in (?, ?) and lifted_at is null and (until is null or until > ?)');
+    assert.deepEqual(parameters, ['2026-09-06 14:33:00', null, 7, 'ban', 'mute', now]);
     assert.doesNotMatch(sql, /now\(\)|CURRENT_TIMESTAMP|returning/i);
 });

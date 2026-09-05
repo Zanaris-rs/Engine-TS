@@ -203,7 +203,17 @@ and replaces two:
   also takes `session_wealth` older than seven days and the evidence of reports
   older than thirty days or dismissed. **Chat is not in it**: `public_chat` and
   `private_chat` are swept by their own writer, the friend server, an hour after
-  they were said, because that sweep has to work on sqlite and mysql too.
+  they were said, because that sweep has to work on sqlite and mysql too — in
+  batches of 10,000, so a table nobody has swept before does not meet a
+  `statement_timeout` and roll back with an hour more to delete next time.
+
+What has **no reaper at all** is `session_log`. Nothing deletes it, on any
+schedule, on any backend: not `reap()`, not the friend server, not the login
+server. That is survivable only because it is nearly empty — which is what
+`logger.sessionLog` being off keeps it. Turn that on and the table grows at
+about 86,000 rows a day at thirty players, forever, read by nothing. **Leave it
+off**; if a fleet ever needs it, it needs a retention rule in the same
+migration.
 
 `test/EvidenceSql.test.ts` reads the migration back and asserts the grant list,
 those retention windows, and that no `public_*` function so much as mentions an
@@ -246,6 +256,20 @@ tails per world; past that a report still gets the ring and no tail. The
 framing itself is a cross-repo contract, pinned in
 `test/fixtures/input-tracking-contract.json` and decoded by the website.
 
+`::track` defaults to 15 minutes and is **capped at 60**; `::track <name> 0`
+stops one early. Anything longer than an hour is a recording rather than a
+watch, and is worth typing the command again for.
+
+**A capture survives the offender relogging.** It is filed against the
+username, not the player object, so somebody who pulls their plug halfway
+through comes back into the window they left: the tail is re-armed on their new
+input ring under the same uuid, with a marker 4 in the stream so the decoder
+reads the gap as a logout rather than as a player who stopped moving. The chunk
+numbering is the capture's, not the ring's, for the same reason. The window
+closes when its clock says so — or when the world reboots, which posts every
+open capture's `evidence_end` before it stops so the after-window chat is still
+copied.
+
 Chat is swept hourly by the friend server, an hour after it was said. The
 evidence copy is what keeps any of it.
 
@@ -269,7 +293,7 @@ Two commands read and undo it:
 
 ```sh
 npm run account -- punishments [name]        # the public record, newest first
-npm run account -- lift <name> [--from <staff>]
+npm run account -- lift <name> [--kind ban|mute] [--from <staff>]
 ```
 
 `lift` does both writes - `banned_until`/`muted_until` to null *and*
@@ -277,6 +301,13 @@ npm run account -- lift <name> [--from <staff>]
 banned_until = NULL` in psql lets the player back in while `/bans` goes on
 saying they are serving a ban nothing will ever revisit. Only punishments still
 in force are stamped; one that already expired was not lifted by anybody.
+
+`--kind` narrows it to one half. Without it both are lifted, which is the usual
+case, and either way the command prints which kinds it is undoing before it does
+anything — "unban but leave the mute standing" is a real decision and it should
+not turn on remembering what the default was. Lifting one kind leaves the
+other's state *and* its `punishment` row alone, so `/bans` does not credit
+anybody with a reversal they did not make.
 
 **A lifted mute does not reach a player who is already online.**
 `player.muted_until` is read from the database at login and cached in the world
@@ -306,8 +337,9 @@ Turn it on in `data/config/world.json`:
 
 `logger.sessionLog` is **off by default and should stay off**. It gates the
 "Server check in" session-log row written for every player every 50 ticks -
-about 86,000 rows a day at thirty players, read by nothing. Reports, evidence
-and wealth events are not behind it; only that firehose is. With
+about 86,000 rows a day at thirty players, read by nothing, and into a table
+with **no reaper on any backend** (see the retention notes above). Reports,
+evidence and wealth events are not behind it; only that firehose is. With
 `logger.enabled` false the world creates no logger thread at all and builds no
 batches for it.
 

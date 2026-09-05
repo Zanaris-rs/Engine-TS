@@ -8,6 +8,7 @@ import { fromDbDate } from '#/db/DateFormat.js';
 import { db, toDbDate } from '#/db/query.js';
 import { PlayerLoading } from '#/engine/entity/PlayerLoading.js';
 import Packet from '#/io/Packet.js';
+import { INTERNAL_MAX_PAYLOAD } from '#/server/InternalClient.js';
 import { updateHiscores } from '#/server/login/Hiscores.js';
 import { handleWithFailureReply, retryReply, type ReplyId, type SendReply } from '#/server/login/LoginMessage.js';
 import {
@@ -243,7 +244,7 @@ export default class LoginServer {
 
         InvType.load('data/pack');
 
-        this.server = new WebSocketServer({ port: Environment.login.port, host: '0.0.0.0' }, () => {
+        this.server = new WebSocketServer({ port: Environment.login.port, host: '0.0.0.0', maxPayload: INTERNAL_MAX_PAYLOAD }, () => {
             printInfo(`Login server listening on port ${Environment.login.port}`);
         });
 

@@ -4,6 +4,7 @@ import { fromDbDate } from '#/db/DateFormat.js';
 import { db, toDbDate } from '#/db/query.js';
 import { SessionLog } from '#/engine/entity/tracking/SessionLog.js';
 import { WealthTransactionEvent } from '#/engine/entity/tracking/WealthEvent.js';
+import { INTERNAL_MAX_PAYLOAD } from '#/server/InternalClient.js';
 import type { EvidenceBeginMessage, EvidenceEndMessage, EvidenceMessage, ReportEvidenceMessage } from '#/server/logger/index.d.js';
 import Environment from '#/util/Environment.js';
 import { printInfo } from '#/util/Logger.js';
@@ -52,7 +53,7 @@ export default class LoggerServer {
     private chains: Map<string, Promise<void>> = new Map();
 
     constructor() {
-        this.server = new WebSocketServer({ port: Environment.logger.port, host: '0.0.0.0' }, () => {
+        this.server = new WebSocketServer({ port: Environment.logger.port, host: '0.0.0.0', maxPayload: INTERNAL_MAX_PAYLOAD }, () => {
             printInfo(`Logger server listening on port ${Environment.logger.port}`);
         });
 

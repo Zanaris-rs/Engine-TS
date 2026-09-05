@@ -251,8 +251,14 @@ export function punishmentsQuery(database: Kysely<DB>, accountId: number | null,
  * against the column's *read* type. Every backend binds it - the sqlite driver
  * formats it with the same `toSqlDateTime` `toDbDate` uses. The value being
  * *written* is the string, as everywhere else.
+ *
+ * `kinds` is which of the two are being undone. Both, usually; one when the
+ * operator said so. The website's `staff_lift` takes a punishment id and so
+ * lifts exactly one row by construction - this is the shell's coarser door, and
+ * "unban this player but leave the mute standing" is a thing moderators
+ * actually want, so the coarse door needs a way to say it.
  */
-export function liftPunishmentsQuery(database: Kysely<DB>, accountId: number, liftedAt: string, liftedByAccountId: number | null, now: Date) {
+export function liftPunishmentsQuery(database: Kysely<DB>, accountId: number, liftedAt: string, liftedByAccountId: number | null, now: Date, kinds: readonly PunishmentKind[] = PUNISHMENT_KINDS) {
     return database
         .updateTable('punishment')
         .set({
@@ -260,6 +266,7 @@ export function liftPunishmentsQuery(database: Kysely<DB>, accountId: number, li
             lifted_by_account_id: liftedByAccountId
         })
         .where('account_id', '=', accountId)
+        .where('kind', 'in', [...kinds])
         .where('lifted_at', 'is', null)
         .where(eb => eb.or([eb('until', 'is', null), eb('until', '>', now)]));
 }

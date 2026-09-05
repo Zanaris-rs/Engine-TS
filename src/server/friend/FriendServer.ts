@@ -4,6 +4,7 @@ import { db, toDbDate } from '#/db/query.js';
 import { CHAT_SWEEP_DELAY_MS, CHAT_SWEEP_INTERVAL_MS, sweepChat } from '#/server/friend/ChatRetention.js';
 import { FriendsClientOpcodes, FriendsServerOpcodes } from '#/server/friend/FriendOpcodes.js';
 import { FriendServerRepository } from '#/server/friend/FriendServerRepository.js';
+import { INTERNAL_MAX_PAYLOAD } from '#/server/InternalClient.js';
 import { ChatModePrivate } from '#/engine/entity/ChatModes.js';
 import Environment from '#/util/Environment.js';
 import { fromBase37 } from '#/util/JString.js';
@@ -27,7 +28,7 @@ export class FriendServer {
     private socketByWorld: Record<number, WebSocket> = {};
 
     constructor() {
-        this.server = new WebSocketServer({ port: Environment.friend.port, host: '0.0.0.0' }, () => {
+        this.server = new WebSocketServer({ port: Environment.friend.port, host: '0.0.0.0', maxPayload: INTERNAL_MAX_PAYLOAD }, () => {
             printInfo(`Friend server listening on port ${Environment.friend.port}`);
         });
 
