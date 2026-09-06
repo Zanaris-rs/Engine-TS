@@ -1,0 +1,20 @@
+{
+    "note": "The items the public /economy page follows one by one. Everything else is still counted - economy_snapshot.items holds every id in the game - but these are the ones worth a line of their own, and the only ones economy_flow reports entering or leaving. Ids come from the content pack (content/pack/obj.pack); names are here for whoever edits this file, and the site uses its own. An item added here has no flow row until the run after the one that first counts it: the previous census was not looking for it, so its delta would be fiction. Nothing here is per-fleet - a fleet that wants a different list ships its own copy at <cwd>/data/config/economy.json, which wins over this one.",
+    "tracked": [
+        { "id": 1038, "name": "Red partyhat" },
+        { "id": 1040, "name": "Yellow partyhat" },
+        { "id": 1042, "name": "Blue partyhat" },
+        { "id": 1044, "name": "Green partyhat" },
+        { "id": 1046, "name": "Purple partyhat" },
+        { "id": 1048, "name": "White partyhat" },
+        { "id": 1050, "name": "Santa hat" },
+        { "id": 1053, "name": "Green h'ween mask" },
+        { "id": 1055, "name": "Blue h'ween mask" },
+        { "id": 1057, "name": "Red h'ween mask" },
+        { "id": 962, "name": "Christmas cracker" },
+        { "id": 981, "name": "Disk of returning" },
+        { "id": 1989, "name": "Half full wine jug" },
+        { "id": 1959, "name": "Pumpkin" },
+        { "id": 1961, "name": "Easter egg" }
+    ]
+}

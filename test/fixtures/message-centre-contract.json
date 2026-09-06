@@ -1,0 +1,16 @@
+{
+    "_comment": "The Message Centre contract shared by engine/ and Website/. The engine counts unread_sql over Kysely for the client's welcome screen; accounts.unread() in prisma/postgres/migrations/3_message_centre counts the same thing after resolving the username; the website counts it for the inbox. If the three ever drift the player sees a number in game that the site cannot explain, and nothing anywhere throws - so it is pinned here and copied into the website's own fixture.",
+    "unread_sql": "count(*) from account_message where account_id = $1 and read_at is null",
+    "kinds": ["welcome", "notice", "ban", "mute", "reply"],
+    "account_message_columns": ["id", "account_id", "ticket_id", "kind", "subject", "body", "created_by_account_id", "created_at", "read_at"],
+    "ticket_kinds": ["bug", "appeal", "other"],
+    "ticket_statuses": ["open", "closed"],
+    "limits": {
+        "subject": 120,
+        "body": 4000,
+        "message_count": 65535,
+        "tickets_per_account_per_day": 5,
+        "ticket_replies_per_account_per_hour": 20,
+        "staff_notices_per_actor_per_hour": 20
+    }
+}

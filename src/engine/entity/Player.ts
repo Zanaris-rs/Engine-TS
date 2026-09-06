@@ -312,6 +312,7 @@ export default class Player extends PathingEntity {
     uid: number = -1;
     reconnecting: boolean = false;
     lowMemory: boolean = false;
+    /** Set at load time when the socket is a WSClientSocket. See `clientKind`. */
     webClient: boolean = false;
     combatLevel: number = 3;
     skillLevel: number = 0;
@@ -389,8 +390,18 @@ export default class Player extends PathingEntity {
     members: boolean = true;
     messageCount: number = 0;
 
+    // set from the login reply; -1 when there is no login server behind us
+    account_id: number = -1;
+
     socialProtect: boolean = false; // social packet spam protection
     reportAbuseProtect: boolean = false; // social packet spam protection
+
+    // Wall clock of the last abuse report that was actually written.
+    // reportAbuseProtect above only survives one tick - resetEntity clears it -
+    // which made Report Abuse an insert into `report` every 600ms for a client
+    // willing to send it. 0 is "never reported", which is always outside the
+    // window; a relog starts a fresh one, and the hop timer already caps that.
+    lastReportAbuse: number = 0;
 
     lastLoginTime: bigint = 0n;
 
@@ -464,7 +475,7 @@ export default class Player extends PathingEntity {
         this.lastAppearance = 0;
         this.appearanceBuf = null;
         this.isActive = false;
-        this.input.flush();
+        this.input.cleanup();
     }
 
     resetEntity(respawn: boolean) {
@@ -1315,6 +1326,16 @@ export default class Player extends PathingEntity {
 
     processInputTracking(): void {
         this.input.onCycle();
+    }
+
+    /**
+     * Which client this player is on, as `report_input.client` records it. It
+     * matters to whoever reads the evidence: the Java client only ever sends
+     * one move record per packet, so the spatial signals a macro verdict leans
+     * on are not available for it.
+     */
+    get clientKind(): 'web' | 'java' {
+        return this.webClient ? 'web' : 'java';
     }
 
     // ----

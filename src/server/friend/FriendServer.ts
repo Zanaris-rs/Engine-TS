@@ -1,57 +1,14 @@
 import { WebSocket, WebSocketServer } from 'ws';
 
 import { db, toDbDate } from '#/db/query.js';
+import { CHAT_SWEEP_DELAY_MS, CHAT_SWEEP_INTERVAL_MS, sweepChat } from '#/server/friend/ChatRetention.js';
+import { FriendsClientOpcodes, FriendsServerOpcodes } from '#/server/friend/FriendOpcodes.js';
 import { FriendServerRepository } from '#/server/friend/FriendServerRepository.js';
-import InternalClient from '#/server/InternalClient.js';
+import { INTERNAL_MAX_PAYLOAD } from '#/server/InternalClient.js';
 import { ChatModePrivate } from '#/engine/entity/ChatModes.js';
 import Environment from '#/util/Environment.js';
-import { fromBase37, toBase37 } from '#/util/JString.js';
+import { fromBase37 } from '#/util/JString.js';
 import { printInfo } from '#/util/Logger.js';
-
-/**
- * client -> server opcodes for friends server
- */
-export const enum FriendsClientOpcodes {
-    WORLD_CONNECT,
-    FRIENDLIST_ADD,
-    FRIENDLIST_DEL,
-    IGNORELIST_ADD,
-    IGNORELIST_DEL,
-    PLAYER_LOGIN,
-    PLAYER_LOGOUT,
-    PLAYER_CHAT_SETMODE,
-    PRIVATE_MESSAGE,
-    PUBLIC_CHAT_LOG,
-    // temporarily in the friend server (it has a constant connection established)
-    RELAY_MUTE,
-    RELAY_KICK,
-    RELAY_SHUTDOWN,
-    RELAY_BROADCAST,
-    RELAY_TRACK,
-    RELAY_RELOAD,
-    RELAY_CLEARLOGINS,
-    RELAY_CLEARLOGOUTS,
-    RELAY_QUEUESCRIPT
-}
-
-/**
- * server -> client opcodes for friends server
- */
-export const enum FriendsServerOpcodes {
-    UPDATE_FRIENDLIST,
-    UPDATE_IGNORELIST,
-    PRIVATE_MESSAGE,
-    // temporarily in the friend server
-    RELAY_MUTE,
-    RELAY_KICK,
-    RELAY_SHUTDOWN,
-    RELAY_BROADCAST,
-    RELAY_TRACK,
-    RELAY_RELOAD,
-    RELAY_CLEARLOGINS,
-    RELAY_CLEARLOGOUTS,
-    RELAY_QUEUESCRIPT
-}
 
 // TODO make this configurable (or at least source it from somewhere common)
 const WORLD_PLAYER_LIMIT = 2000;
@@ -71,7 +28,7 @@ export class FriendServer {
     private socketByWorld: Record<number, WebSocket> = {};
 
     constructor() {
-        this.server = new WebSocketServer({ port: Environment.friend.port, host: '0.0.0.0' }, () => {
+        this.server = new WebSocketServer({ port: Environment.friend.port, host: '0.0.0.0', maxPayload: INTERNAL_MAX_PAYLOAD }, () => {
             printInfo(`Friend server listening on port ${Environment.friend.port}`);
         });
 
@@ -407,7 +364,34 @@ export class FriendServer {
         });
     }
 
-    async start() {}
+    async start() {
+        // a minute in, so a friend server that is about to fall over on boot
+        // does not spend its one act deleting rows
+        setTimeout(() => {
+            void this.sweepChat();
+            // unref'd like the timeout: the websocket server is what should
+            // decide this process is still alive, not a retention timer
+            setInterval(() => void this.sweepChat(), CHAT_SWEEP_INTERVAL_MS).unref();
+        }, CHAT_SWEEP_DELAY_MS).unref();
+    }
+
+    /**
+     * Delete chat older than the retention window, in batches.
+     *
+     * The rule and the loop are {@link ChatRetention}'s, which is what lets a
+     * test drive them; this is the timer's end of it.
+     *
+     * It catches for itself: there is no caller to catch for a timer, and an
+     * unhandled rejection here would take the friend server down and with it
+     * every world's friends list.
+     */
+    private async sweepChat() {
+        try {
+            printInfo((await sweepChat(db)).message);
+        } catch (err) {
+            console.error(err);
+        }
+    }
 
     private async initializeWorld(world: number, socket: WebSocket) {
         if (this.socketByWorld[world]) {
@@ -491,196 +475,6 @@ export class FriendServer {
                 targetUsername37: target.toString(),
                 staffLvl,
                 pmId,
-                chat
-            })
-        );
-    }
-}
-
-export class FriendClient extends InternalClient {
-    nodeId: number = 0;
-    profile: string;
-
-    constructor(nodeId: number) {
-        super(Environment.friend.host, Environment.friend.port);
-
-        this.nodeId = nodeId;
-        this.profile = Environment.node.profile;
-    }
-
-    public async worldConnect() {
-        await this.connect();
-
-        if (!this.ws || !this.wsr || !this.wsr.checkIfWsLive()) {
-            return;
-        }
-
-        this.ws.send(
-            JSON.stringify({
-                type: FriendsClientOpcodes.WORLD_CONNECT,
-                world: this.nodeId,
-                profile: this.profile
-            })
-        );
-    }
-
-    public async playerLogin(username: string, privateChat: number, staffLvl: number) {
-        await this.connect();
-
-        if (!this.ws || !this.wsr || !this.wsr.checkIfWsLive()) {
-            return;
-        }
-
-        this.ws.send(
-            JSON.stringify({
-                type: FriendsClientOpcodes.PLAYER_LOGIN,
-                world: this.nodeId,
-                username37: toBase37(username).toString(),
-                privateChat,
-                staffLvl
-            })
-        );
-    }
-
-    public async playerLogout(username: string) {
-        await this.connect();
-
-        if (!this.ws || !this.wsr || !this.wsr.checkIfWsLive()) {
-            return;
-        }
-
-        this.ws.send(
-            JSON.stringify({
-                type: FriendsClientOpcodes.PLAYER_LOGOUT,
-                world: this.nodeId,
-                username37: toBase37(username).toString()
-            })
-        );
-    }
-
-    public async playerFriendslistAdd(username: string, target: bigint) {
-        await this.connect();
-
-        if (!this.ws || !this.wsr || !this.wsr.checkIfWsLive()) {
-            return;
-        }
-
-        this.ws.send(
-            JSON.stringify({
-                type: FriendsClientOpcodes.FRIENDLIST_ADD,
-                world: this.nodeId,
-                username37: toBase37(username).toString(),
-                targetUsername37: target.toString()
-            })
-        );
-    }
-
-    public async playerFriendslistRemove(username: string, target: bigint) {
-        await this.connect();
-
-        if (!this.ws || !this.wsr || !this.wsr.checkIfWsLive()) {
-            return;
-        }
-
-        this.ws.send(
-            JSON.stringify({
-                type: FriendsClientOpcodes.FRIENDLIST_DEL,
-                world: this.nodeId,
-                username37: toBase37(username).toString(),
-                targetUsername37: target.toString()
-            })
-        );
-    }
-
-    public async playerIgnorelistAdd(username: string, target: bigint) {
-        await this.connect();
-
-        if (!this.ws || !this.wsr || !this.wsr.checkIfWsLive()) {
-            return;
-        }
-
-        this.ws.send(
-            JSON.stringify({
-                type: FriendsClientOpcodes.IGNORELIST_ADD,
-                world: this.nodeId,
-                username37: toBase37(username).toString(),
-                targetUsername37: target.toString()
-            })
-        );
-    }
-
-    public async playerIgnorelistRemove(username: string, target: bigint) {
-        await this.connect();
-
-        if (!this.ws || !this.wsr || !this.wsr.checkIfWsLive()) {
-            return;
-        }
-
-        this.ws.send(
-            JSON.stringify({
-                type: FriendsClientOpcodes.IGNORELIST_DEL,
-                world: this.nodeId,
-                username37: toBase37(username).toString(),
-                targetUsername37: target.toString()
-            })
-        );
-    }
-
-    public async playerChatSetMode(username: string, privateChatMode: ChatModePrivate) {
-        await this.connect();
-
-        if (!this.ws || !this.wsr || !this.wsr.checkIfWsLive()) {
-            return;
-        }
-
-        this.ws.send(
-            JSON.stringify({
-                type: FriendsClientOpcodes.PLAYER_CHAT_SETMODE,
-                world: this.nodeId,
-                username37: toBase37(username).toString(),
-                privateChat: privateChatMode
-            })
-        );
-    }
-
-    public async privateMessage(username: string, staffLvl: number, pmId: number, target: bigint, chat: string, coord: number) {
-        await this.connect();
-
-        if (!this.ws || !this.wsr || !this.wsr.checkIfWsLive()) {
-            return;
-        }
-
-        this.ws.send(
-            JSON.stringify({
-                type: FriendsClientOpcodes.PRIVATE_MESSAGE,
-                world: this.nodeId,
-                profile: this.profile,
-                nodeTime: Date.now(),
-                username37: toBase37(username).toString(),
-                targetUsername37: target.toString(),
-                staffLvl,
-                pmId,
-                chat,
-                coord
-            })
-        );
-    }
-
-    async publicMessage(session_uuid: string, coord: number, chat: string) {
-        await this.connect();
-
-        if (!this.ws || !this.wsr || !this.wsr.checkIfWsLive()) {
-            return;
-        }
-
-        this.ws.send(
-            JSON.stringify({
-                type: FriendsClientOpcodes.PUBLIC_CHAT_LOG,
-                nodeId: this.nodeId,
-                profile: this.profile,
-                nodeTime: Date.now(),
-                session_uuid,
-                coord,
                 chat
             })
         );

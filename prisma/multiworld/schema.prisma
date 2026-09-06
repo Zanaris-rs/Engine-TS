@@ -1,10 +1,6 @@
-generator kysely {
-    provider = "prisma-kysely"
-
-    output       = "../../src/db"
-    fileName     = "types.ts"
-    enumFileName = "enums.ts"
-}
+// src/db/types.ts is generated from prisma/postgres/schema.prisma only - see the
+// note at the top of that file. Keep the models here in step with it (minus the
+// postgres-only hiscore sort index) so every backend has the same columns.
 
 datasource db {
     provider = "mysql"
@@ -21,14 +17,44 @@ model account {
     username String @unique
     password String
 
-    registration_ip   String?
-    registration_date DateTime @default(now())
+    email            String
+    email_normalized String
 
-    muted_until  DateTime?
-    banned_until DateTime?
+    registration_ip    String?
+    registration_group String?
+    registration_date  DateTime @default(now())
+    signup_agent_hash  String?
+
+    muted_until    DateTime?
+    banned_until   DateTime?
+    playable_after DateTime?
 
     staffmodlevel Int     @default(0)
     members       Boolean @default(false)
+
+    @@index([email_normalized])
+    @@index([registration_ip])
+    @@index([registration_group])
+}
+
+model signup_attempt {
+    id         Int      @id @default(autoincrement())
+    ip         String
+    ip_group   String
+    created_at DateTime @default(now())
+
+    @@index([ip, created_at])
+    @@index([ip_group, created_at])
+}
+
+model login_attempt {
+    id         Int      @id @default(autoincrement())
+    username   String
+    ip         String
+    created_at DateTime @default(now())
+
+    @@index([username, created_at])
+    @@index([ip, created_at])
 }
 
 model account_login {
@@ -98,6 +124,8 @@ model session {
 
     uid Int
     ip  String?
+
+    @@index([profile, account_id, timestamp(sort: Desc)])
 }
 
 model session_log {
@@ -126,6 +154,11 @@ model session_wealth {
     recipient_session String?
     recipient_items   String? @db.MediumText
     recipient_value   Int?
+
+    // the bare timestamp is the 7-day retention sweep; the compound one is how
+    // the report evidence functions find one session's rows in a window.
+    @@index([timestamp])
+    @@index([session_uuid, timestamp])
 }
 
 model public_chat {
@@ -136,6 +169,10 @@ model public_chat {
 
     coord   Int
     message String
+
+    // the hourly retention sweep, then the evidence copy by session.
+    @@index([timestamp])
+    @@index([session_uuid, timestamp])
 }
 
 model private_chat {
@@ -148,6 +185,10 @@ model private_chat {
     coord         Int
     to_account_id Int
     message       String
+
+    // the hourly retention sweep, then the evidence copy by sender.
+    @@index([timestamp])
+    @@index([account_id, timestamp])
 }
 
 model report {
@@ -159,6 +200,31 @@ model report {
     coord    Int
     offender String
     reason   Int
+
+    // who pressed Report Abuse, and on which world. Null on the rows written
+    // before the login server took the packet over from the (disabled) logger.
+    reporter_account_id Int?
+    world               Int?
+
+    // The world generates `uuid` and sends it to both the login server (this
+    // row) and the logger server (report_input / report_chat), so the two hub
+    // processes need no ordering. Null on every row older than migration 4,
+    // and its index is deliberately not unique: several reports against the
+    // same offender inside one capture window share a uuid.
+    uuid                  String?
+    offender_account_id   Int?
+    offender_session_uuid String?
+    offender_coord        Int?
+
+    // resolution is actioned | dismissed | watch, null while it is open.
+    resolved_at            DateTime?
+    resolution             String?
+    resolved_by_account_id Int?
+    staff_note             String?   @db.Text
+
+    @@index([timestamp(sort: Desc)])
+    @@index([uuid])
+    @@index([offender_account_id, timestamp(sort: Desc)])
 }
 
 model input_report {
@@ -168,4 +234,214 @@ model input_report {
     timestamp    DateTime
 
     data Bytes
+}
+
+// ---------------------------------------------------------------------------
+// the message centre
+// ---------------------------------------------------------------------------
+//
+// One unread rule everywhere, and it is a cross-repo contract pinned in
+// test/fixtures/message-centre-contract.json:
+//
+//     count(*) from account_message where account_id = $1 and read_at is null
+//
+// which is both the number the login server puts on the client's welcome
+// screen and the number the website's Message Centre shows. No foreign keys,
+// like every other table here; the SQL API in
+// prisma/postgres/migrations/3_message_centre owns the rules the website is
+// allowed to rely on.
+
+model account_message {
+    id Int @id @default(autoincrement())
+
+    // ticket_id is null for a standalone notice and set when a staff reply
+    // lands on a ticket; kind is welcome | notice | ban | mute | reply;
+    // created_by_account_id is null when the system wrote the row rather than
+    // a person.
+    account_id            Int
+    ticket_id             Int?
+    kind                  String
+    subject               String
+    body                  String @db.Text
+    created_by_account_id Int?
+
+    created_at DateTime  @default(now())
+    read_at    DateTime?
+
+    @@index([account_id, read_at])
+    @@index([account_id, created_at(sort: Desc)])
+}
+
+model ticket {
+    id Int @id @default(autoincrement())
+
+    // kind is bug | appeal | other, status is open | closed
+    account_id Int
+    kind       String
+    subject    String
+    status     String @default("open")
+
+    created_at DateTime @default(now())
+    updated_at DateTime @default(now())
+
+    @@index([account_id, updated_at(sort: Desc)])
+    @@index([status, updated_at(sort: Desc)])
+}
+
+model ticket_message {
+    id Int @id @default(autoincrement())
+
+    ticket_id         Int
+    author_account_id Int
+    from_staff        Boolean @default(false)
+    body              String @db.Text
+
+    created_at DateTime @default(now())
+
+    @@index([ticket_id, created_at])
+    @@index([author_account_id, created_at])
+}
+
+model staff_action {
+    id Int @id @default(autoincrement())
+
+    // action names the staff function that ran, target what it acted on
+    actor_account_id Int
+    action           String
+    target           String
+
+    created_at DateTime @default(now())
+
+    @@index([actor_account_id, action, created_at])
+}
+
+// ---------------------------------------------------------------------------
+// report evidence, the public record, and the economy census
+// ---------------------------------------------------------------------------
+//
+// No foreign keys, like every other table here; the SQL API in
+// prisma/postgres/migrations/4_evidence_and_records owns the rules the website
+// is allowed to rely on, and nothing outside a SECURITY DEFINER function ever
+// reads these rows. Evidence lives 30 days or until the report is dismissed,
+// whichever comes first.
+//
+// economy_snapshot.items/tracked are jsonb on postgres and MediumText here:
+// the writer hands the same JSON string to every backend, a VARCHAR(191) is
+// nowhere near enough for a whole item census, and neither is a TEXT - the map
+// carries every item id in the game and passes 64 KB long before the item list
+// runs out. MediumText is 16 MB, and session_wealth.account_items next door
+// already had the same problem.
+
+model report_input {
+    id Int @id @default(autoincrement())
+
+    // kind is ring | live - a chunk that had already rotated out of the
+    // player's ring when the report arrived, or one captured after it. client
+    // is web | java. `data` is the engine's own record framing, decoded by the
+    // website and never by the database.
+    report_uuid String
+    seq         Int
+    kind        String
+    client      String
+
+    started_at DateTime
+    flushed_at DateTime
+
+    data Bytes
+
+    @@index([report_uuid, seq])
+}
+
+model report_chat {
+    id Int @id @default(autoincrement())
+
+    // the offender's own chat in the report window, copied out of public_chat
+    // and private_chat before the hourly sweep deletes it. kind is public |
+    // private_sent; to_username is null on a public row. `message` stays a
+    // plain String, like the two tables it is copied from.
+    report_uuid String
+    at          DateTime
+    kind        String
+    to_username String?
+    coord       Int
+    message     String
+
+    @@index([report_uuid, at])
+}
+
+model punishment {
+    id Int @id @default(autoincrement())
+
+    // kind is ban | mute; `until` null is permanent. automated is true when the
+    // engine issued it rather than a person, and issued_by_account_id is then
+    // null. Neither the issuer nor the flag's source ever reaches the public
+    // page: it says "a moderator" or "automated" and nothing more.
+    account_id Int
+    username   String
+    kind       String
+
+    issued_at            DateTime  @default(now())
+    until                DateTime?
+    automated            Boolean   @default(false)
+    issued_by_account_id Int?
+
+    // the optional one-line public explanation (capped at 120 characters by
+    // the SQL API, so no Text needed), and the reversal. The row is never
+    // deleted - that is what makes it a record.
+    note                 String?
+    lifted_at            DateTime?
+    lifted_by_account_id Int?
+
+    @@index([issued_at(sort: Desc)])
+    @@index([account_id])
+}
+
+model staff_spawn {
+    id Int @id @default(autoincrement())
+
+    // every item a staff member creates on a production world, so the economy
+    // census can say "added by staff" rather than leave a step unexplained.
+    // target_account_id is null when the cheat named someone the login server
+    // could not resolve; the spawn still happened.
+    staff_account_id  Int
+    target_account_id Int?
+    item_id           Int
+    count             Int
+    world             Int
+
+    created_at DateTime @default(now())
+
+    @@index([created_at(sort: Desc)])
+}
+
+model economy_snapshot {
+    id Int @id @default(autoincrement())
+
+    // the hourly census of every save file. `items` is the whole thing as
+    // {item_id: count}; `tracked` is the subset named in
+    // data/config/economy.json, stored beside it so a later edit to that list
+    // cannot rewrite history. coins is item 995 summed across every save, which
+    // passes 2^31 long before the player count does anything interesting.
+    taken_at DateTime @default(now())
+    profile  String
+    players  Int
+    coins    BigInt
+    items    String   @db.MediumText
+    tracked  String   @db.MediumText
+
+    @@index([profile, taken_at(sort: Desc)])
+}
+
+model economy_flow {
+    id Int @id @default(autoincrement())
+
+    // per tracked item, the signed change against the previous snapshot:
+    // positive entered the game, negative left it. Nothing here names an
+    // account.
+    taken_at DateTime @default(now())
+    profile  String
+    item_id  Int
+    delta    Int
+
+    @@index([profile, taken_at(sort: Desc)])
 }

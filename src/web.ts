@@ -50,9 +50,8 @@ function fileExists(filePath: string): boolean {
     }
 }
 
-const fastify = Fastify({
-    // logger: true
-});
+// behind the reverse proxy, so req.ip resolves the real client address
+const fastify = Fastify({ trustProxy: 'loopback' });
 
 fastify.register(FastifyView, {
     engine: {
@@ -97,7 +96,7 @@ fastify.route({
                     socket.terminate();
                 }
             },
-            req.socket.remoteAddress ?? 'unknown'
+            req.ip
         );
 
         socket.on('message', (message: Buffer<ArrayBufferLike>) => {
@@ -153,6 +152,19 @@ fastify.get<{ Querystring: { plugin?: string; lowmem?: string } }>('/rs2.cgi', a
             lowmem
         });
     }
+});
+
+// public world info, consumed by the world-select website
+
+fastify.get('/world.json', async (_req, reply) => {
+    reply.header('Access-Control-Allow-Origin', '*');
+    reply.header('Cache-Control', 'public, max-age=10');
+    return {
+        id: Environment.node.id,
+        members: Environment.node.members,
+        players: World.getTotalPlayers(),
+        maxPlayers: Environment.node.maxConnected
+    };
 });
 
 // cache routes
@@ -333,7 +345,15 @@ management.get('/setup/config', async () => {
     };
 });
 
-management.put('/setup/config', async req => {
+management.put('/setup/config', async (req, reply) => {
+    // this endpoint rewrites world.json wholesale, and node.production: false
+    // grants every player staffmodlevel 4 on the next restart - destructive
+    // commands included. It is a dev convenience, not an admin API.
+    if (Environment.node.production) {
+        reply.status(403);
+        return { error: 'Editing the config over HTTP is disabled in production.' };
+    }
+
     const config = normalizeWorldConfig(req.body);
     saveWorldConfig(config);
 
@@ -344,5 +364,8 @@ management.put('/setup/config', async req => {
 });
 
 export async function startManagementWeb() {
-    await management.listen({ port: Environment.web.managementPort, host: '0.0.0.0' });
+    // loopback only: this server is not behind Caddy and bootstrap.sh sets no
+    // host firewall, so reach it with `ssh -L 8898:localhost:8898` like the rest
+    // of the fleet's admin surface
+    await management.listen({ port: Environment.web.managementPort, host: '127.0.0.1' });
 }

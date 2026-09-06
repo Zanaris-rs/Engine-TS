@@ -5,8 +5,13 @@ import { tryParseBoolean, tryParseInt, tryParseString } from '#/util/TryParse.js
 
 export interface WorldConfig {
     easyStartup: boolean;
-    website: {
-        registration: boolean;
+    account: {
+        /**
+         * Create an account for any unknown username typed at the login screen.
+         * Off by default: a world with a website in front of it registers there,
+         * behind whatever gate the website runs.
+         */
+        autoCreate: boolean;
     };
     web: {
         port: number;
@@ -46,11 +51,19 @@ export interface WorldConfig {
     };
     logger: {
         enabled: boolean;
+        /**
+         * Send the session log to the logger server. Off by default: the
+         * "Server check in" every 50 ticks per player is roughly 86,000 rows a
+         * day at thirty players, and nothing reads them. Reports and wealth
+         * events do not go through this flag.
+         */
+        sessionLog: boolean;
         host: string;
         port: number;
     };
     db: {
         backend: string;
+        url: string;
         host: string;
         port: number;
         user: string;
@@ -79,8 +92,8 @@ export function getWorldConfigPath() {
 export function createDefaultWorldConfig(): WorldConfig {
     return {
         easyStartup: false,
-        website: {
-            registration: true
+        account: {
+            autoCreate: false
         },
         web: {
             port: process.platform === 'win32' || process.platform === 'darwin' ? 80 : 8888,
@@ -120,11 +133,15 @@ export function createDefaultWorldConfig(): WorldConfig {
         },
         logger: {
             enabled: false,
+            sessionLog: false,
             host: 'localhost',
             port: 43501
         },
         db: {
             backend: 'sqlite',
+            // postgres only, and only as a fallback: DATABASE_URL wins, so the
+            // hub can keep its credentials in /etc/lostcity/hub.env
+            url: '',
             host: 'localhost',
             port: 3306,
             user: 'root',
@@ -183,6 +200,13 @@ export function normalizeWorldConfig(value: unknown): WorldConfig {
         config.db.verbose = tryParseBoolean((value.db as Record<string, unknown>).kyselyVerbose as string | boolean | undefined | null, config.db.verbose);
     }
 
+    // Legacy compatibility: website.registration was the inverse of account.autoCreate.
+    // Without this an existing dev world.json silently gains auto-registration.
+    if (isObject(value) && isObject(value.website) && !isObject(value.account)) {
+        const registration = tryParseBoolean((value.website as Record<string, unknown>).registration as string | boolean | undefined | null, !config.account.autoCreate);
+        config.account.autoCreate = !registration;
+    }
+
     return config;
 }
 
@@ -222,7 +246,8 @@ function migrateFromLegacyEnv(defaults: WorldConfig, env: Record<string, string>
     const config = structuredClone(defaults);
 
     config.easyStartup = tryParseBoolean(env.EASY_STARTUP, config.easyStartup);
-    config.website.registration = tryParseBoolean(env.WEBSITE_REGISTRATION, config.website.registration);
+    // WEBSITE_REGISTRATION meant "the website registers players", i.e. the inverse
+    config.account.autoCreate = !tryParseBoolean(env.WEBSITE_REGISTRATION, !config.account.autoCreate);
 
     config.web.port = tryParseInt(env.WEB_PORT, config.web.port);
     config.web.allowedOrigin = tryParseString(env.WEB_ALLOWED_ORIGIN, config.web.allowedOrigin);
@@ -256,10 +281,12 @@ function migrateFromLegacyEnv(defaults: WorldConfig, env: Record<string, string>
     config.friend.port = tryParseInt(env.FRIEND_PORT, config.friend.port);
 
     config.logger.enabled = tryParseBoolean(env.LOGGER_SERVER, config.logger.enabled);
+    config.logger.sessionLog = tryParseBoolean(env.LOGGER_SESSION_LOG, config.logger.sessionLog);
     config.logger.host = tryParseString(env.LOGGER_HOST, config.logger.host);
     config.logger.port = tryParseInt(env.LOGGER_PORT, config.logger.port);
 
     config.db.backend = tryParseString(env.DB_BACKEND, config.db.backend);
+    config.db.url = tryParseString(env.DB_URL, config.db.url);
     config.db.host = tryParseString(env.DB_HOST, config.db.host);
     config.db.port = tryParseInt(env.DB_PORT, config.db.port);
     config.db.user = tryParseString(env.DB_USER, config.db.user);
@@ -283,7 +310,17 @@ export function saveWorldConfig(config: WorldConfig) {
     fs.writeFileSync(worldConfigPath, JSON.stringify(config, null, 4) + '\n');
 }
 
+/**
+ * The env var is overlaid here rather than in loadWorldConfig() on purpose: the
+ * setup UI reads the config with GET and writes it straight back with PUT, so a
+ * secret merged into the config object would be persisted into
+ * data/config/world.json on the next save.
+ */
 export function getDatabaseUrl(config: WorldConfig): string {
+    if (config.db.backend === 'postgres') {
+        return process.env.DATABASE_URL ?? config.db.url;
+    }
+
     const user = encodeURIComponent(config.db.user);
     const pass = encodeURIComponent(config.db.pass);
     return `mysql://${user}:${pass}@${config.db.host}:${config.db.port}/${config.db.name}`;

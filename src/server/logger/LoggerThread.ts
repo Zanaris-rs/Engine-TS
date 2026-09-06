@@ -1,11 +1,118 @@
 import { parentPort } from 'worker_threads';
 
 import LoggerClient from '#/server/logger/LoggerClient.js';
+import type { EvidenceMessage } from '#/server/logger/index.d.js';
 import Environment from '#/util/Environment.js';
 
 const client = new LoggerClient();
 
 if (!parentPort) throw new Error('This file must be run as a worker thread.');
+
+/**
+ * Evidence that could not be sent, waiting for the logger server to come back.
+ *
+ * Only evidence is held. A session log or a wealth event is one row among
+ * thousands and a lost batch costs nothing anybody will look for; a chunk of a
+ * macro report is a piece of the only record of what somebody was doing, and
+ * the logger server restarting for ten seconds during a deploy should not
+ * silently take a bite out of it.
+ *
+ * Held, but bounded, and by the two things that can go wrong here: a logger
+ * that is down for a long time (the TTL) and a world that keeps producing
+ * evidence while it is (the cap, oldest dropped first). Neither can turn a
+ * disconnected logger into a memory leak in the world process.
+ */
+const MAX_PENDING = 32;
+const PENDING_TTL = 5 * 60 * 1000;
+const RETRY_INTERVAL = 15_000;
+
+const pending: Map<string, { message: EvidenceMessage; firstTried: number }> = new Map();
+
+/**
+ * One key per thing that can be written once: a chunk, or the end of a window.
+ *
+ * `started_at` is in the chunk key beside `seq` for the same reason the logger
+ * server's own duplicate probe carries it: `seq` is the world's promise that
+ * two chunks of one report are different, and a promise that has to hold across
+ * a relog is worth checking against something the chunk itself knows. Two
+ * chunks that agree on the report, the number *and* the instant their first
+ * record was appended are one chunk that got sent twice.
+ */
+function evidenceKey(message: EvidenceMessage): string {
+    if (message.type === 'report_evidence') {
+        return `${message.report_uuid}:${message.seq}:${message.started_at}`;
+    }
+
+    return `${message.report_uuid}:${message.type === 'evidence_begin' ? 'begin' : 'end'}`;
+}
+
+async function sendEvidence(message: EvidenceMessage): Promise<void> {
+    const key = evidenceKey(message);
+
+    if (await client.evidence(message)) {
+        pending.delete(key);
+        return;
+    }
+
+    if (!pending.has(key)) {
+        pending.set(key, { message, firstTried: Date.now() });
+
+        // Map iterates in insertion order, so the first key is the oldest
+        while (pending.size > MAX_PENDING) {
+            const oldest = pending.keys().next();
+
+            if (oldest.done) {
+                break;
+            }
+
+            pending.delete(oldest.value);
+        }
+    }
+}
+
+async function retryPending(): Promise<void> {
+    if (pending.size === 0) {
+        return;
+    }
+
+    const now = Date.now();
+
+    for (const [key, held] of pending) {
+        if (now - held.firstTried >= PENDING_TTL) {
+            pending.delete(key);
+            continue;
+        }
+
+        if (await client.evidence(held.message)) {
+            pending.delete(key);
+        } else {
+            // the socket is still down; the rest of the queue will not fare
+            // any better this time round
+            break;
+        }
+    }
+}
+
+/**
+ * Re-armed rather than an interval, so two rounds can never overlap: a round
+ * that spends thirty seconds waiting on a dead socket would otherwise have a
+ * second one walking the same map behind it, sending everything twice.
+ *
+ * It has no caller to catch for it, so it catches for itself.
+ */
+function scheduleRetry(): void {
+    setTimeout(async () => {
+        try {
+            await retryPending();
+        } catch (err) {
+            console.error(err);
+        } finally {
+            scheduleRetry();
+        }
+    }, RETRY_INTERVAL).unref();
+}
+
+scheduleRetry();
 
 parentPort.on('message', async msg => {
     try {
@@ -42,17 +149,18 @@ async function handleRequests(_parentPort: ParentPort, msg: any) {
             }
             break;
         }
-        case 'report': {
+        // no 'report' case: Report Abuse goes to the login thread now. This
+        // one dropped every report on a fleet with the logger disabled, which
+        // is every fleet we run, while the player was told it had been
+        // received. LoggerServer still handles the opcode for an older world.
+        //
+        // no 'input_track' case either: it wrote `input_report`, which nothing
+        // has ever read. Report evidence is the two messages below.
+        case 'evidence_begin':
+        case 'report_evidence':
+        case 'evidence_end': {
             if (Environment.logger.enabled) {
-                const { session_uuid, coord, offender, reason } = msg;
-                await client.report(session_uuid, coord, offender, reason);
-            }
-            break;
-        }
-        case 'input_track': {
-            if (Environment.logger.enabled) {
-                const { session_uuid, timestamp, buf } = msg;
-                await client.inputTrack(session_uuid, timestamp, buf);
+                await sendEvidence(msg as EvidenceMessage);
             }
             break;
         }
