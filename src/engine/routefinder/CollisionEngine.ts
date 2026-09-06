@@ -6,6 +6,23 @@ export default class CollisionEngine {
 
     private readonly zones = new Map<number, Uint32Array>();
 
+    /**
+     * Stored for a zone that is allocated but holds no flags.
+     *
+     * An absent zone reads as CollisionFlag.NULL - off-map, impassable - while an
+     * allocated empty one reads as OPEN, so the map loader has to allocate all
+     * 123,648 zones to make the empty ones walkable. Only ~28% ever hold a flag,
+     * and the rest were 123,648 distinct all-zero Uint32Arrays.
+     *
+     * Sharing one instance keeps that distinction for free: it is all-zero, so
+     * `get` and `isFlagged` read OPEN out of it without knowing it is special.
+     *
+     * NEVER write through this. Writers must go through writableZoneByIndex(),
+     * which copies on first use - a write here would flag every empty zone on the
+     * map at once. Object.freeze cannot enforce it (it throws on typed arrays).
+     */
+    private static readonly EMPTY_ZONE: Uint32Array = new Uint32Array(CollisionEngine.ZONE_TILE_COUNT);
+
     static zoneIndex(x: number, z: number, y: number): number {
         return ((x >> 3) & 0x7ff) | (((z >> 3) & 0x7ff) << 11) | ((y & 0x3) << 22);
     }
@@ -14,13 +31,32 @@ export default class CollisionEngine {
         return (x & 0x7) | ((z & 0x7) << 3);
     }
 
+    /**
+     * Marks a zone allocated - so it reads OPEN rather than NULL - without giving
+     * it storage. May return the shared EMPTY_ZONE; do not write through it.
+     */
     private allocateIfAbsentByIndex(zoneIndex: number): Uint32Array {
         let zone = this.zones.get(zoneIndex);
         if (!zone) {
-            zone = new Uint32Array(CollisionEngine.ZONE_TILE_COUNT);
+            zone = CollisionEngine.EMPTY_ZONE;
             this.zones.set(zoneIndex, zone);
         }
         return zone;
+    }
+
+    /**
+     * Storage that is safe to write to, materialised on first use. EMPTY_ZONE is
+     * all-zero, so a freshly zeroed array is an exact copy of what it replaces.
+     */
+    private writableZoneByIndex(zoneIndex: number): Uint32Array {
+        const zone = this.zones.get(zoneIndex);
+        if (zone !== undefined && zone !== CollisionEngine.EMPTY_ZONE) {
+            return zone;
+        }
+
+        const materialised = new Uint32Array(CollisionEngine.ZONE_TILE_COUNT);
+        this.zones.set(zoneIndex, materialised);
+        return materialised;
     }
 
     allocateIfAbsent(x: number, z: number, y: number): void {
@@ -46,18 +82,35 @@ export default class CollisionEngine {
     }
 
     set(x: number, z: number, y: number, mask: number): void {
-        const zone = this.allocateIfAbsentByIndex(CollisionEngine.zoneIndex(x, z, y));
-        zone[CollisionEngine.tileIndex(x, z)] = mask >>> 0;
+        const value = mask >>> 0;
+        const zoneIndex = CollisionEngine.zoneIndex(x, z, y);
+        // writing 0 into an empty zone changes nothing, so it only has to allocate
+        const zone = value === 0 ? this.allocateIfAbsentByIndex(zoneIndex) : this.writableZoneByIndex(zoneIndex);
+        if (zone !== CollisionEngine.EMPTY_ZONE) {
+            zone[CollisionEngine.tileIndex(x, z)] = value;
+        }
     }
 
     add(x: number, z: number, y: number, mask: number): void {
-        const zone = this.allocateIfAbsentByIndex(CollisionEngine.zoneIndex(x, z, y));
+        const zoneIndex = CollisionEngine.zoneIndex(x, z, y);
+        if (mask >>> 0 === 0) {
+            // OR-ing zero cannot set a bit; just record that the zone exists
+            this.allocateIfAbsentByIndex(zoneIndex);
+            return;
+        }
+
+        const zone = this.writableZoneByIndex(zoneIndex);
         const tile = CollisionEngine.tileIndex(x, z);
         zone[tile] = (zone[tile] | mask) >>> 0;
     }
 
     remove(x: number, z: number, y: number, mask: number): void {
         const zone = this.allocateIfAbsentByIndex(CollisionEngine.zoneIndex(x, z, y));
+        if (zone === CollisionEngine.EMPTY_ZONE) {
+            // every tile is already 0, so clearing bits is a no-op
+            return;
+        }
+
         const tile = CollisionEngine.tileIndex(x, z);
         zone[tile] = (zone[tile] & ~mask) >>> 0;
     }
