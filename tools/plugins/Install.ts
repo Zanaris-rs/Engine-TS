@@ -11,7 +11,7 @@ import { importModel, reportImport } from '#tools/plugins/import/ImportModel.js'
 /**
  * Install plugins from a repository or a local directory.
  *
- *   npx tsx tools/plugins/Install.ts https://github.com/Zanaris-rs/04SecondAge
+ *   npx tsx tools/plugins/Install.ts https://github.com/<owner>/<plugin-repo>
  *   npx tsx tools/plugins/Install.ts ../04SecondAge --plugin dragon_scimitar
  *
  * Plugins are **copied**, never symlinked: the packer's directory walk uses `entry.isDirectory()`,
