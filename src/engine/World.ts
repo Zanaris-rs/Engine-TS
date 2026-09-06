@@ -125,15 +125,19 @@ type LogoutRequest = {
 };
 
 class World {
-    private loginThread = new Worker(new URL('../server/login/LoginThread.ts', import.meta.url));
-    private friendThread = new Worker(new URL('../server/friend/FriendThread.ts', import.meta.url));
+    // Created by startThreads(), not here. As class fields these ran on `new World()`
+    // at the bottom of this module, so merely *importing* World span up two V8
+    // isolates - which the login server does, transitively through PlayerLoading,
+    // paying for two worker threads it never speaks to.
+    private loginThread!: Worker;
+    private friendThread!: Worker;
     /**
      * Null unless `logger.enabled`. The logger server has never run on this
      * fleet, so every batch this thread was handed was serialised, posted and
      * dropped on the floor; a world with the logger off now builds nothing and
      * posts nothing.
      */
-    private loggerThread: Worker | null = Environment.logger.enabled ? new Worker(new URL('../server/logger/LoggerThread.ts', import.meta.url)) : null;
+    private loggerThread: Worker | null = null;
     private devThread: Worker | null = null;
 
     private static readonly PLAYERS: number = 2047;
@@ -221,7 +225,16 @@ class World {
     loginAddressAttempts: TTLCache<string, number> = new TTLCache({ ttl: 60000 });
     loginDeviceAttempts: TTLCache<string, number> = new TTLCache({ ttl: 15000 });
 
-    constructor() {
+    /**
+     * Spawns the worker threads. Called from start(), so a process that only
+     * imports World - the login server does - does not pay for isolates it will
+     * never post to.
+     */
+    private startThreads(): void {
+        this.loginThread = new Worker(new URL('../server/login/LoginThread.ts', import.meta.url));
+        this.friendThread = new Worker(new URL('../server/friend/FriendThread.ts', import.meta.url));
+        this.loggerThread = Environment.logger.enabled ? new Worker(new URL('../server/logger/LoggerThread.ts', import.meta.url)) : null;
+
         this.loginThread.on('message', msg => {
             try {
                 this.onLoginMessage(msg);
@@ -339,6 +352,8 @@ class World {
 
     async start(skipMaps = false, startCycle = true): Promise<void> {
         printInfo('Starting world');
+
+        this.startThreads();
 
         FontType.load('data/pack');
         WordEnc.load('data/pack');
