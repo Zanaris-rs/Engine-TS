@@ -33,6 +33,7 @@ import VarNpcType from '#/cache/config/VarNpcType.js';
 import VarPlayerType from '#/cache/config/VarPlayerType.js';
 import VarSharedType from '#/cache/config/VarSharedType.js';
 import { CrcBuffer32, makeCrcs } from '#/cache/CrcTable.js';
+import Midi from '#/cache/midi/Midi.js';
 import WordEnc from '#/cache/wordenc/WordEnc.js';
 import { BlockWalk } from '#/engine/entity/BlockWalk.js';
 import { EntityLifeCycle } from '#/engine/entity/EntityLifeCycle.js';
@@ -102,7 +103,6 @@ import DbTableIndex from '#/cache/config/DbTableIndex.js';
 import VarBitType from '#/cache/config/VarBitType.js';
 import FriendlistLoaded from '#/network/game/server/model/FriendlistLoaded.js';
 import HashTable from '#/datastruct/HashTable.js';
-import Midi from '#/cache/midi/Midi.js';
 
 const priv = forge.pki.privateKeyFromPem(fs.readFileSync('data/config/private.pem', 'ascii'));
 
@@ -250,6 +250,8 @@ class World {
 
     reload(clearInvs: boolean = true): void {
         OnDemand.reloadCache();
+        // midi lengths are memoised off that cache, so they are stale now
+        Midi.reset();
 
         VarPlayerType.load('data/pack');
         VarBitType.load('data/pack');
@@ -340,7 +342,6 @@ class World {
 
         FontType.load('data/pack');
         WordEnc.load('data/pack');
-        Midi.load();
 
         this.reload();
 
