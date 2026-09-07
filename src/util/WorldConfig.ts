@@ -15,6 +15,7 @@ export interface WorldConfig {
     };
     web: {
         port: number;
+        host: string;
         allowedOrigin: string;
         managementPort: number;
     };
@@ -24,10 +25,17 @@ export interface WorldConfig {
     node: {
         id: number;
         port: number;
+        host: string;
         members: boolean;
         autoSubscribeMembers: boolean;
         xpRate: number;
         production: boolean;
+        /**
+         * Staff level given to logins when the login server is off (a dev world,
+         * or the kit's single player). -1 means unset: 4 when production is off,
+         * as before, and 0 when it is on. See resolveLocalStaffLevel().
+         */
+        localStaffLevel: number;
         minimumWealthValueEvent: number;
         debug: boolean;
         debugProfile: boolean;
@@ -97,6 +105,7 @@ export function createDefaultWorldConfig(): WorldConfig {
         },
         web: {
             port: process.platform === 'win32' || process.platform === 'darwin' ? 80 : 8888,
+            host: '0.0.0.0',
             allowedOrigin: '',
             managementPort: 8898
         },
@@ -106,10 +115,12 @@ export function createDefaultWorldConfig(): WorldConfig {
         node: {
             id: 10,
             port: 43594,
+            host: '0.0.0.0',
             members: true,
             autoSubscribeMembers: true,
             xpRate: 1,
             production: false,
+            localStaffLevel: -1,
             minimumWealthValueEvent: 10,
             debug: true,
             debugProfile: false,
@@ -210,6 +221,12 @@ export function normalizeWorldConfig(value: unknown): WorldConfig {
     return config;
 }
 
+/** The staff level a local login gets: the explicit setting, else today's rule. */
+export function resolveLocalStaffLevel(config: WorldConfig): number {
+    if (config.node.localStaffLevel >= 0) return config.node.localStaffLevel;
+    return config.node.production ? 0 : 4;
+}
+
 function parseLegacyEnvFile(filePath: string): Record<string, string> {
     const lines = fs.readFileSync(filePath, 'utf8').split(/\r?\n/);
     const env: Record<string, string> = {};
@@ -250,6 +267,7 @@ function migrateFromLegacyEnv(defaults: WorldConfig, env: Record<string, string>
     config.account.autoCreate = !tryParseBoolean(env.WEBSITE_REGISTRATION, !config.account.autoCreate);
 
     config.web.port = tryParseInt(env.WEB_PORT, config.web.port);
+    config.web.host = tryParseString(env.WEB_HOST, config.web.host);
     config.web.allowedOrigin = tryParseString(env.WEB_ALLOWED_ORIGIN, config.web.allowedOrigin);
     config.web.managementPort = tryParseInt(env.WEB_MANAGEMENT_PORT, config.web.managementPort);
 
@@ -257,10 +275,12 @@ function migrateFromLegacyEnv(defaults: WorldConfig, env: Record<string, string>
 
     config.node.id = tryParseInt(env.NODE_ID, config.node.id);
     config.node.port = tryParseInt(env.NODE_PORT, config.node.port);
+    config.node.host = tryParseString(env.NODE_HOST, config.node.host);
     config.node.members = tryParseBoolean(env.NODE_MEMBERS, config.node.members);
     config.node.autoSubscribeMembers = tryParseBoolean(env.NODE_AUTO_SUBSCRIBE_MEMBERS, config.node.autoSubscribeMembers);
     config.node.xpRate = tryParseInt(env.NODE_XPRATE, config.node.xpRate);
     config.node.production = tryParseBoolean(env.NODE_PRODUCTION, config.node.production);
+    config.node.localStaffLevel = tryParseInt(env.NODE_LOCAL_STAFF_LEVEL, config.node.localStaffLevel);
     config.node.minimumWealthValueEvent = tryParseInt(env.NODE_MINIMUM_WEALTH_VALUE_EVENT, config.node.minimumWealthValueEvent);
     config.node.debug = tryParseBoolean(env.NODE_DEBUG, config.node.debug);
     config.node.debugProfile = tryParseBoolean(env.NODE_DEBUG_PROFILE, config.node.debugProfile);

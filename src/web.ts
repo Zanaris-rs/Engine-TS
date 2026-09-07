@@ -20,6 +20,7 @@ import { LoggerEventType } from '#/server/logger/LoggerEventType.js';
 import WSClientSocket from '#/server/ws/WSClientSocket.js';
 
 import Environment from '#/util/Environment.js';
+import { requestShutdown } from '#/util/Shutdown.js';
 import { tryParseInt } from '#/util/TryParse.js';
 import { createDefaultWorldConfig, loadWorldConfig, normalizeWorldConfig, saveWorldConfig } from '#/util/WorldConfig.js';
 
@@ -314,7 +315,7 @@ fastify.register(FastifyStatic, {
 });
 
 export async function startWeb() {
-    await fastify.listen({ port: Environment.web.port, host: '0.0.0.0' });
+    await fastify.listen({ port: Environment.web.port, host: Environment.web.host });
 }
 
 // management routes
@@ -361,6 +362,14 @@ management.put('/setup/config', async (req, reply) => {
         config,
         restartRequired: true
     };
+});
+
+// The kit's single player stops its world this way: loopback only, like the
+// rest of the management surface, and the same path as a signal, so saves flush.
+management.post('/shutdown', async (_req, reply) => {
+    const accepted = requestShutdown(() => World.rebootTimer(0));
+    reply.status(202);
+    return { stopping: true, alreadyStopping: !accepted };
 });
 
 export async function startManagementWeb() {

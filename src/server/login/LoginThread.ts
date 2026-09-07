@@ -5,6 +5,7 @@ import { parentPort } from 'worker_threads';
 import { LoginClient } from '#/server/login/LoginClient.js';
 import Environment from '#/util/Environment.js';
 import { printError, printInfo } from '#/util/Logger.js';
+import { resolveLocalStaffLevel } from '#/util/WorldConfig.js';
 
 import { type GenericLoginThreadResponse } from './index.d.js';
 import { trackLoginAttempts, trackLoginTime } from './LoginMetrics.js';
@@ -82,11 +83,7 @@ async function handleRequests(parentPort: ParentPort, msg: any) {
                 });
                 stopTimer();
             } else {
-                let staffmodlevel = 0;
-
-                if (!Environment.node.production) {
-                    staffmodlevel = 4; // dev (destructive commands)
-                }
+                const staffmodlevel = resolveLocalStaffLevel(Environment);
 
                 const profile = Environment.node.profile;
                 if (!fs.existsSync(`data/players/${profile}`)) {

@@ -7,6 +7,7 @@ import World from '#/engine/World.js';
 import TcpServer from '#/server/tcp/TcpServer.js';
 import Environment from '#/util/Environment.js';
 import { printError, printInfo } from '#/util/Logger.js';
+import { requestShutdown } from '#/util/Shutdown.js';
 import { startManagementWeb, startWeb } from '#/web.js';
 import OnDemand from '#/engine/OnDemand.js';
 
@@ -45,14 +46,8 @@ await startManagementWeb();
 register.setDefaultLabels({ nodeId: Environment.node.id });
 collectDefaultMetrics({ register });
 
-let exiting = false;
 function safeExit() {
-    if (exiting) {
-        return;
-    }
-
-    exiting = true;
-    World.rebootTimer(0);
+    requestShutdown(() => World.rebootTimer(0));
 }
 
 process.on('SIGINT', safeExit);

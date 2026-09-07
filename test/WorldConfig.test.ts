@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { createDefaultWorldConfig, getDatabaseUrl, normalizeWorldConfig } from '#/util/WorldConfig.js';
+import { createDefaultWorldConfig, getDatabaseUrl, normalizeWorldConfig, resolveLocalStaffLevel } from '#/util/WorldConfig.js';
 
 function withDatabaseUrl<T>(value: string | undefined, fn: () => T): T {
     const previous = process.env.DATABASE_URL;
@@ -70,4 +70,28 @@ test('normalizeWorldConfig drops keys that are not part of the schema', () => {
 
     assert.equal(config.db.backend, 'postgres');
     assert.equal('nonsense' in config, false);
+});
+
+test('bind hosts default to every interface and accept loopback', () => {
+    const defaults = createDefaultWorldConfig();
+    assert.equal(defaults.web.host, '0.0.0.0');
+    assert.equal(defaults.node.host, '0.0.0.0');
+    const local = normalizeWorldConfig({ web: { host: '127.0.0.1' }, node: { host: '127.0.0.1' } });
+    assert.equal(local.web.host, '127.0.0.1');
+    assert.equal(local.node.host, '127.0.0.1');
+});
+
+test('the local staff level is unset by default and follows production when unset', () => {
+    const config = createDefaultWorldConfig();
+    assert.equal(config.node.localStaffLevel, -1);
+    config.node.production = false;
+    assert.equal(resolveLocalStaffLevel(config), 4);
+    config.node.production = true;
+    assert.equal(resolveLocalStaffLevel(config), 0);
+});
+
+test('an explicit local staff level wins over production', () => {
+    assert.equal(resolveLocalStaffLevel(normalizeWorldConfig({ node: { production: false, localStaffLevel: 0 } })), 0);
+    assert.equal(resolveLocalStaffLevel(normalizeWorldConfig({ node: { production: true, localStaffLevel: 4 } })), 4);
+    assert.equal(resolveLocalStaffLevel(normalizeWorldConfig({ node: { localStaffLevel: 2 } })), 2);
 });
