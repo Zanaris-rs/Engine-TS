@@ -164,13 +164,13 @@ the values back-filled.
 
 The postgres side has no baseline problem: `0_init` was never edited, and the
 later changes are their own migrations, `1_register_caps`, `2_website_login`,
-`3_message_centre` and `4_evidence_and_records`.
+`3_message_centre`, `4_evidence_and_records` and `5_economy_categories`.
 
 #### The SQL API
 
 Postgres only. The `website` role has **no privilege on any table in `public`** —
 `select * from punishment` as `website` is refused, and so is every other table
-these functions read. What it has instead is `EXECUTE` on thirty-two
+these functions read. What it has instead is `EXECUTE` on thirty-four
 `SECURITY DEFINER` functions in the `accounts` schema, each with
 `search_path` pinned to `public, pg_temp`, and that list is the entire surface a
 leaked website credential reaches. `4_evidence_and_records` adds twelve of them
@@ -189,13 +189,27 @@ and replaces two:
   Resolving a report as `dismissed` deletes its `report_input` and `report_chat`
   rows immediately. All three leave a `staff_action` row.
 - **public** (`public_punishments`, `public_economy`, `public_economy_flow`,
-  `public_staff_spawns`) — the transparency reads. They select only the public
+  `public_staff_spawns`, and `5_economy_categories`' `public_economy_latest`
+  and `public_economy_group_range`) — the transparency reads. They select only the public
   columns: no issuing or lifting moderator, no account id, no address, no name
   on a census or a spawn. The census functions read one profile — `main`, from
   `accounts.public_profile()`, a constant granted to nobody. Deliberately not a
   session setting: a GUC is settable by whoever holds the connection, so
   `website` could have pointed `/economy` at any profile with one `SET`.
   Changing it is a migration.
+
+  `5_economy_categories` adds the other two. `public_economy_latest` returns the
+  newest snapshot's `items` column — the whole census, every id in the game,
+  which `public_economy` deliberately does not return — and
+  `public_economy_group_range` gives each category's lowest and highest total
+  across a window. The categories are an **argument** (`p_groups`) and not a
+  column: "Ores", "Runes" and the rest are a decision about how to present a
+  census rather than a fact about the game, so they live in the website's
+  `lib/items/groups.ts` and renaming one is not a migration. Ids no group names
+  are summed into the reserved key `'*'` inside the same query, because a
+  minimum is not a subtraction and a residual computed by the caller would be a
+  bound rather than a figure. Still no name on anything: the census counts
+  objects, not owners.
 - **`staff_punishment_note`** is capped at twenty an hour per moderator,
   counted off its own `staff_action` rows, because it is the one verb here that
   writes public text without re-typing a password.
@@ -217,7 +231,10 @@ migration.
 
 `test/EvidenceSql.test.ts` reads the migration back and asserts the grant list,
 those retention windows, and that no `public_*` function so much as mentions an
-issuer or an address. Nothing in this repo executes the file — the proof that it
+issuer or an address; `test/EconomyCategoriesSql.test.ts` does the same for
+migration 5, and additionally pins the two clauses in `public_economy_group_range`
+whose purpose a reader would not guess — the `'*'` residual and the `CROSS JOIN`
+that gives a category empty for a week a low of 0 rather than no low. Nothing in this repo executes the file — the proof that it
 answers correctly is a throwaway postgres, never the live pooler.
 
 ## Reports and evidence
