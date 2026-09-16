@@ -239,6 +239,16 @@ whose purpose a reader would not guess — the `'*'` residual and the `CROSS JOI
 that gives a category empty for a week a low of 0 rather than no low. Nothing in this repo executes the file — the proof that it
 answers correctly is a throwaway postgres, never the live pooler.
 
+`6_invites` makes registration invite-only. `accounts.register` is no longer
+executable by `website`; `accounts.register_with_invite` takes a single-use
+code as its first argument and claims it in the same statement that creates
+the account. `account.invites_enabled` is false by default and only
+`accounts.staff_set_invites` or `npm run account -- invite-enable` turns it on;
+a trigger on `account.banned_until` turns it off and revokes the account's live
+links. Players read and manage their own links through `invites`,
+`invite_create` and `invite_revoke`; staff see `staff_inviters` and
+`staff_invite_tree`. `invite` rows that were claimed are never reaped.
+
 ## Reports and evidence
 
 A Report Abuse used to reach a moderator as a row with a reason code and
