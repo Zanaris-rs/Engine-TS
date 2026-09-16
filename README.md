@@ -172,7 +172,7 @@ later changes are their own migrations, `1_register_caps`, `2_website_login`,
 
 Postgres only. The `website` role has **no privilege on any table in `public`** —
 `select * from punishment` as `website` is refused, and so is every other table
-these functions read. What it has instead is `EXECUTE` on thirty-four
+these functions read. What it has instead is `EXECUTE` on forty-two
 `SECURITY DEFINER` functions in the `accounts` schema, each with
 `search_path` pinned to `public, pg_temp`, and that list is the entire surface a
 leaked website credential reaches. `4_evidence_and_records` adds twelve of them
@@ -231,6 +231,18 @@ about 86,000 rows a day at thirty players, forever, read by nothing. **Leave it
 off**; if a fleet ever needs it, it needs a retention rule in the same
 migration.
 
+`6_invites` makes registration invite-only, replacing `accounts.register` with
+nine functions. `invite_preview` answers the `/join/<code>` door without
+spending anything; `register_with_invite` takes a single-use code as its first
+argument and claims it in the same statement that creates the account.
+`account.invites_enabled` is false by default and only
+`accounts.staff_set_invites` or `npm run account -- invite-enable` turns it on;
+a trigger on `account.banned_until` turns it off and revokes the account's
+live links. Players read and manage their own links through `invites`,
+`invite_create` and `invite_revoke`, and see their own citizen number and
+inviter through `citizen`; staff see `staff_inviters` and `staff_invite_tree`.
+`invite` rows that were claimed are never reaped.
+
 `test/EvidenceSql.test.ts` reads the migration back and asserts the grant list,
 those retention windows, and that no `public_*` function so much as mentions an
 issuer or an address; `test/EconomyCategoriesSql.test.ts` does the same for
@@ -238,16 +250,6 @@ migration 5, and additionally pins the two clauses in `public_economy_group_rang
 whose purpose a reader would not guess — the `'*'` residual and the `CROSS JOIN`
 that gives a category empty for a week a low of 0 rather than no low. Nothing in this repo executes the file — the proof that it
 answers correctly is a throwaway postgres, never the live pooler.
-
-`6_invites` makes registration invite-only. `accounts.register` is no longer
-executable by `website`; `accounts.register_with_invite` takes a single-use
-code as its first argument and claims it in the same statement that creates
-the account. `account.invites_enabled` is false by default and only
-`accounts.staff_set_invites` or `npm run account -- invite-enable` turns it on;
-a trigger on `account.banned_until` turns it off and revokes the account's live
-links. Players read and manage their own links through `invites`,
-`invite_create` and `invite_revoke`; staff see `staff_inviters` and
-`staff_invite_tree`. `invite` rows that were claimed are never reaped.
 
 ## Reports and evidence
 

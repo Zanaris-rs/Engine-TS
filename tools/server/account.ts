@@ -535,9 +535,18 @@ const INVITE_DAYS = 14;
 /** Where printed links point. Only an operator testing locally changes it. */
 const INVITE_SITE = process.env.INVITE_SITE_URL ?? 'https://zanaris.rs';
 
-function inviteState(row: { claimed_at: Date | string | null; revoked_at: Date | string | null; expires_at: Date | string }, now: Date): string {
+// Mirrors accounts.invite_state + accounts.invite_maker_ok: claimed wins over
+// everything; else a link is revoked either because it was stamped that way
+// or because its maker is disabled or banned right now, whether or not any
+// row says so; else expired; else live.
+function inviteState(
+    row: { claimed_at: Date | string | null; revoked_at: Date | string | null; expires_at: Date | string },
+    now: Date,
+    maker: { invites_enabled: boolean; banned_until: Date | string | null }
+): string {
     if (row.claimed_at !== null) return 'claimed';
-    if (row.revoked_at !== null) return 'revoked';
+    const makerOk = maker.invites_enabled && (maker.banned_until === null || fromDbDate(maker.banned_until) <= now);
+    if (row.revoked_at !== null || !makerOk) return 'revoked';
     return fromDbDate(row.expires_at) <= now ? 'expired' : 'live';
 }
 
@@ -646,7 +655,7 @@ async function listInvites(args: string[]) {
 
     const username = resolveUsername(name, true);
 
-    const account = await db.selectFrom('account').select(['id', 'username', 'invites_enabled']).where('username', '=', username).executeTakeFirst();
+    const account = await db.selectFrom('account').select(['id', 'username', 'invites_enabled', 'banned_until']).where('username', '=', username).executeTakeFirst();
     if (!account) {
         fail(`No account called '${username}'.`);
     }
@@ -674,7 +683,7 @@ async function listInvites(args: string[]) {
     console.log(`${rows.length} link(s):`);
 
     for (const row of rows) {
-        const state = inviteState(row, now);
+        const state = inviteState(row, now, account);
         const detail = state === 'claimed' ? `by ${toDisplayName(row.claimed_by ?? '?')} ${formatStamp(row.claimed_at)}` : state === 'revoked' ? `(${row.revoked_reason ?? '?'}) ${formatStamp(row.revoked_at)}` : `until ${formatStamp(row.expires_at)}`;
         console.log(`  ${formatInviteCode(row.code)}  ${state.padEnd(7)}  made ${formatStamp(row.created_at)}  ${detail}`);
     }
