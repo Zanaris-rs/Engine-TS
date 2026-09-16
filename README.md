@@ -114,14 +114,15 @@ migration 4 adds to `report` - `uuid`, `offender_account_id`,
 `offender_session_uuid`, `offender_coord`, `resolved_at`, `resolution`,
 `resolved_by_account_id`, `staff_note` - with `report_uuid_idx` and
 `report_offender_account_id_timestamp_idx`, and the retention and evidence
-indexes on `session_wealth`, `public_chat` and `private_chat`), were added to
-the sqlite baseline **in place**, editing `20251229170623_clean` rather than
-adding a migration after it. That is deliberate: `ec2-setup/build.sh` seeds a
-new host from exactly one migration directory, so sqlite has to stay a single
-file. mysql, which has no such constraint, got the additive
-`20260904000000_registration_columns`, `20260905000000_website_login`,
-`20260906000000_message_centre` and `20260908000000_evidence_and_records`
-instead.
+indexes on `session_wealth`, `public_chat` and `private_chat`), and then the
+invites (`account.invites_enabled`, `invite`, `invite_attempt` and their
+indexes), were added to the sqlite baseline **in place**, editing
+`20251229170623_clean` rather than adding a migration after it. That is
+deliberate: `ec2-setup/build.sh` seeds a new host from exactly one migration
+directory, so sqlite has to stay a single file. mysql, which has no such
+constraint, got the additive `20260904000000_registration_columns`,
+`20260905000000_website_login`, `20260906000000_message_centre`,
+`20260908000000_evidence_and_records` and `20260916000000_invites` instead.
 
 Editing it in place is easier than it sounds: the baseline is exactly what
 `prisma migrate diff --from-empty --to-schema-datamodel
@@ -164,7 +165,8 @@ the values back-filled.
 
 The postgres side has no baseline problem: `0_init` was never edited, and the
 later changes are their own migrations, `1_register_caps`, `2_website_login`,
-`3_message_centre`, `4_evidence_and_records` and `5_economy_categories`.
+`3_message_centre`, `4_evidence_and_records`, `5_economy_categories` and
+`6_invites`.
 
 #### The SQL API
 
