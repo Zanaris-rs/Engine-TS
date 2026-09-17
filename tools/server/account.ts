@@ -12,7 +12,6 @@
  *   npm run account -- lift <name> [--kind ban|mute] [--from <staff>]
  *   npm run account -- invite-enable <name> [--from <staff>]
  *   npm run account -- invite-disable <name> [--from <staff>]
- *   npm run account -- invite-create <name> [--count N]
  *   npm run account -- invites <name>
  *
  * With account.autoCreate off there is no other way to make the first account,
@@ -27,12 +26,12 @@
  * public record on /bans still saying the player is serving a ban nobody can
  * find. Lifting is two writes, and this does both.
  *
- * The four invite commands are the shell twin of /staff/invites and the
- * account centre's invite page. `invite-enable` is also how the very first
- * account gets the privilege: the website's staff page needs a staff account
- * that can already reach it. On postgres a ban revokes an account's links by
- * trigger (migration 6); the sqlite and mysql backends have no website and no
- * such trigger.
+ * The three invite commands are the shell twin of the switch on
+ * /staff/invites, for when the site is down or an account's links have to die
+ * now. Links themselves are only ever made on the website, which applies the
+ * caps migration 6 sets; this tool never mints one. On postgres a ban revokes
+ * an account's links by trigger (migration 6); the sqlite and mysql backends
+ * have no website and no such trigger.
  */
 import * as bcrypt from 'bcrypt-ts';
 
@@ -42,7 +41,6 @@ import { liftPunishmentsQuery, NOTICE_KIND, PUNISHMENT_KINDS, punishmentsQuery }
 import type { PunishmentKind } from '#/server/login/MessageCentre.js';
 import { checkPassword, checkUsername, ipGroup, isValidEmail, normalizeEmail } from '#/util/Account.js';
 import Environment from '#/util/Environment.js';
-import { formatInviteCode, generateInviteCode } from '#/util/InviteCode.js';
 import { toDisplayName, toSafeName } from '#/util/JString.js';
 
 const USAGE = `Usage:
@@ -56,12 +54,9 @@ const USAGE = `Usage:
   account.ts lift <name> [--kind ban|mute] [--from <staff>]
   account.ts invite-enable <name> [--from <staff>]
   account.ts invite-disable <name> [--from <staff>]
-  account.ts invite-create <name> [--count N]
   account.ts invites <name>
 
-  --kind    which half to undo; both when it is not given, and always printed
-
-  --count   how many invite links to mint at once, 1 to 20 (default 1)`;
+  --kind    which half to undo; both when it is not given, and always printed`;
 
 function fail(message: string): never {
     console.error(message);
@@ -530,10 +525,10 @@ async function lift(args: string[]) {
     }
 }
 
-const INVITE_DAYS = 14;
-
-/** Where printed links point. Only an operator testing locally changes it. */
-const INVITE_SITE = process.env.INVITE_SITE_URL ?? 'https://zanaris.rs';
+/** `VTPVXVR14D2PF2DB` as `VTPV-XVR1-4D2P-F2DB`, the way the website shows it. */
+function formatInviteCode(code: string): string {
+    return (code.match(/.{1,4}/g) ?? []).join('-');
+}
 
 // Mirrors accounts.invite_state + accounts.invite_maker_ok: claimed wins over
 // everything; else a link is revoked either because it was stamped that way
@@ -604,44 +599,6 @@ async function setInvites(args: string[], enabled: boolean) {
     }
     if (!actor) {
         console.log('No --from, so the record does not say who did this. Pass one if this was a person.');
-    }
-}
-
-/**
- * Mint links for an account that may invite. Bypasses the website's twenty-live
- * cap on purpose - this is the operator's tool - but never mints more than
- * twenty in one go.
- */
-async function inviteCreate(args: string[]) {
-    const index = args.indexOf('--count');
-    const count = index === -1 ? 1 : Number(args[index + 1]);
-    const rest = index === -1 ? args : [...args.slice(0, index), ...args.slice(index + 2)];
-    const [name] = rest;
-
-    if (!name || !Number.isInteger(count) || count < 1 || count > 20) {
-        fail(`--count is a whole number from 1 to 20.\n\n${USAGE}`);
-    }
-
-    const username = resolveUsername(name, true);
-
-    const account = await db.selectFrom('account').select(['id', 'username', 'invites_enabled', 'banned_until']).where('username', '=', username).executeTakeFirst();
-    if (!account) {
-        fail(`No account called '${username}'.`);
-    }
-    if (!account.invites_enabled) {
-        fail(`Inviting is off for ${username}. Run invite-enable first.`);
-    }
-    if (account.banned_until !== null && fromDbDate(account.banned_until) > new Date()) {
-        fail(`${username} is banned; links it made would not work.`);
-    }
-
-    const expires = new Date(Date.now() + INVITE_DAYS * 24 * 60 * 60 * 1000);
-
-    console.log(`${count} link(s) for ${toDisplayName(account.username)}, each good for one account, until ${formatStamp(expires)} UTC:`);
-    for (let i = 0; i < count; i++) {
-        const code = generateInviteCode();
-        await db.insertInto('invite').values({ code, created_by_account_id: account.id, expires_at: toDbDate(expires) }).execute();
-        console.log(`  ${INVITE_SITE}/join/${formatInviteCode(code)}`);
     }
 }
 
@@ -723,9 +680,6 @@ switch (command) {
         break;
     case 'invite-disable':
         await setInvites(args, false);
-        break;
-    case 'invite-create':
-        await inviteCreate(args);
         break;
     case 'invites':
         await listInvites(args);
