@@ -17,6 +17,7 @@ export type account = {
     playable_after: Timestamp | null;
     staffmodlevel: Generated<number>;
     members: Generated<boolean>;
+    invites_enabled: Generated<boolean>;
 };
 export type account_login = {
     account_id: number;
@@ -86,6 +87,22 @@ export type input_report = {
     session_uuid: string;
     timestamp: Timestamp;
     data: Buffer;
+};
+export type invite = {
+    id: Generated<number>;
+    code: string;
+    created_by_account_id: number;
+    created_at: Generated<Timestamp>;
+    expires_at: Timestamp;
+    claimed_by_account_id: number | null;
+    claimed_at: Timestamp | null;
+    revoked_at: Timestamp | null;
+    revoked_reason: string | null;
+};
+export type invite_attempt = {
+    id: Generated<number>;
+    ip: string;
+    created_at: Generated<Timestamp>;
 };
 export type ipban = {
     ip: string;
@@ -241,6 +258,8 @@ export type DB = {
     hiscore_large: hiscore_large;
     ignorelist: ignorelist;
     input_report: input_report;
+    invite: invite;
+    invite_attempt: invite_attempt;
     ipban: ipban;
     login_attempt: login_attempt;
     private_chat: private_chat;

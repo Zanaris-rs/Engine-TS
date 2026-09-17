@@ -50,6 +50,9 @@ model account {
     staffmodlevel Int     @default(0)
     members       Boolean @default(false)
 
+    // off until staff switch it on; see migrations/6_invites
+    invites_enabled Boolean @default(false)
+
     @@index([email_normalized])
     @@index([registration_ip])
     @@index([registration_group])
@@ -456,4 +459,39 @@ model economy_flow {
     delta    Int
 
     @@index([profile, taken_at(sort: Desc)])
+}
+
+// ---------------------------------------------------------------------------
+// invites
+// ---------------------------------------------------------------------------
+//
+// Registration is by invitation only. The SQL API in
+// prisma/postgres/migrations/6_invites owns the rules. Claimed rows are the
+// invite tree and are never deleted.
+
+model invite {
+    id Int @id @default(autoincrement())
+
+    code                  String   @unique
+    created_by_account_id Int
+    created_at            DateTime @default(now()) @db.Timestamptz(3)
+    expires_at            DateTime @db.Timestamptz(3)
+
+    claimed_by_account_id Int?
+    claimed_at            DateTime? @db.Timestamptz(3)
+
+    // revoked_reason is 'inviter', 'staff' or 'banned'
+    revoked_at     DateTime? @db.Timestamptz(3)
+    revoked_reason String?
+
+    @@index([created_by_account_id, created_at(sort: Desc)])
+    @@index([claimed_by_account_id])
+}
+
+model invite_attempt {
+    id         Int      @id @default(autoincrement())
+    ip         String
+    created_at DateTime @default(now()) @db.Timestamptz(3)
+
+    @@index([ip, created_at])
 }

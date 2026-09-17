@@ -18,7 +18,8 @@ CREATE TABLE "account" (
     "banned_until" DATETIME,
     "playable_after" DATETIME,
     "staffmodlevel" INTEGER NOT NULL DEFAULT 0,
-    "members" BOOLEAN NOT NULL DEFAULT false
+    "members" BOOLEAN NOT NULL DEFAULT false,
+    "invites_enabled" BOOLEAN NOT NULL DEFAULT false
 );
 
 -- CreateTable
@@ -288,6 +289,26 @@ CREATE TABLE "economy_flow" (
     "delta" INTEGER NOT NULL
 );
 
+-- CreateTable
+CREATE TABLE "invite" (
+    "id" INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+    "code" TEXT NOT NULL,
+    "created_by_account_id" INTEGER NOT NULL,
+    "created_at" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "expires_at" DATETIME NOT NULL,
+    "claimed_by_account_id" INTEGER,
+    "claimed_at" DATETIME,
+    "revoked_at" DATETIME,
+    "revoked_reason" TEXT
+);
+
+-- CreateTable
+CREATE TABLE "invite_attempt" (
+    "id" INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+    "ip" TEXT NOT NULL,
+    "created_at" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
 -- CreateIndex
 CREATE UNIQUE INDEX "account_username_key" ON "account"("username");
 
@@ -383,4 +404,16 @@ CREATE INDEX "economy_snapshot_profile_taken_at_idx" ON "economy_snapshot"("prof
 
 -- CreateIndex
 CREATE INDEX "economy_flow_profile_taken_at_idx" ON "economy_flow"("profile", "taken_at" DESC);
+
+-- CreateIndex
+CREATE UNIQUE INDEX "invite_code_key" ON "invite"("code");
+
+-- CreateIndex
+CREATE INDEX "invite_created_by_account_id_created_at_idx" ON "invite"("created_by_account_id", "created_at" DESC);
+
+-- CreateIndex
+CREATE INDEX "invite_claimed_by_account_id_idx" ON "invite"("claimed_by_account_id");
+
+-- CreateIndex
+CREATE INDEX "invite_attempt_ip_created_at_idx" ON "invite_attempt"("ip", "created_at");
 
