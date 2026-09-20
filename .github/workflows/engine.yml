@@ -1,3 +1,5 @@
+# Note: GitHub indexes this repo's workflows from pushes that land on the
+# default branch. If PRs show no checks at all, the index needs a commit here.
 name: Verify Engine Code
 
 on:
