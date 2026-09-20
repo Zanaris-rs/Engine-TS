@@ -165,14 +165,14 @@ the values back-filled.
 
 The postgres side has no baseline problem: `0_init` was never edited, and the
 later changes are their own migrations, `1_register_caps`, `2_website_login`,
-`3_message_centre`, `4_evidence_and_records`, `5_economy_categories` and
-`6_invites`.
+`3_message_centre`, `4_evidence_and_records`, `5_economy_categories`,
+`6_invites` and `7_staff_spawn_total`.
 
 #### The SQL API
 
 Postgres only. The `website` role has **no privilege on any table in `public`** —
 `select * from punishment` as `website` is refused, and so is every other table
-these functions read. What it has instead is `EXECUTE` on forty-two
+these functions read. What it has instead is `EXECUTE` on forty-four
 `SECURITY DEFINER` functions in the `accounts` schema, each with
 `search_path` pinned to `public, pg_temp`, and that list is the entire surface a
 leaked website credential reaches. `4_evidence_and_records` adds twelve of them
@@ -243,12 +243,32 @@ live links. Players read and manage their own links through `invites`,
 inviter through `citizen`; staff see `staff_inviters` and `staff_invite_tree`.
 `invite` rows that were claimed are never reaped.
 
+`7_staff_spawn_total` lets /economy say "ever". `public_staff_spawns` clamps
+its argument to 1..90 days and stops at 500 rows, and does both silently, so a
+page headlining "0 items ever created by staff" from that read would be
+printing a claim it had not checked. `public_staff_spawn_total` takes no
+argument and returns one row - how many spawns, how many items, and the first
+and last of them - and `public_staff_spawns_all` returns every row in the same
+four columns the windowed read returns, so the website parses one shape
+whichever it called. The windowed read stays, defined and granted, as the
+fallback until the migration is applied. An empty table still answers with a
+row (`0, 0, null, null`) rather than with nothing, because "nothing has ever
+happened" and "the read failed" are different sentences on that page. Both
+functions are unbounded on purpose: only an item-creating cheat writes to
+`staff_spawn`, nothing has ever reaped it, and **nothing should** - a retention
+rule added later would not make the page fail, it would make it quietly lie.
+
 `test/EvidenceSql.test.ts` reads the migration back and asserts the grant list,
 those retention windows, and that no `public_*` function so much as mentions an
 issuer or an address; `test/EconomyCategoriesSql.test.ts` does the same for
 migration 5, and additionally pins the two clauses in `public_economy_group_range`
 whose purpose a reader would not guess — the `'*'` residual and the `CROSS JOIN`
-that gives a category empty for a week a low of 0 rather than no low. Nothing in this repo executes the file — the proof that it
+that gives a category empty for a week a low of 0 rather than no low.
+`test/StaffSpawnTotalSql.test.ts` does it for migration 7, and pins the two
+things a reader could not see from the SQL: that the total has no `GROUP BY`,
+so an empty table answers with a row instead of with nothing, and that no
+`reap()` in any migration mentions `staff_spawn`, so the page's "ever" stays
+true. Nothing in this repo executes the file — the proof that it
 answers correctly is a throwaway postgres, never the live pooler.
 
 ## Reports and evidence
