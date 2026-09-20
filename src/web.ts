@@ -161,7 +161,11 @@ fastify.get('/world.json', async (_req, reply) => {
     reply.header('Access-Control-Allow-Origin', '*');
     reply.header('Cache-Control', 'public, max-age=10');
     return {
-        id: Environment.node.id,
+        // The public world number, not the protocol node id. node.id is
+        // 10-based because the client renders a friend's world as
+        // "World-" + (nodeId - 9), while this endpoint, the wN hostnames and
+        // the world-select site all key off 1, 2, ...
+        id: Environment.node.id - 9,
         members: Environment.node.members,
         players: World.getTotalPlayers(),
         maxPlayers: Environment.node.maxConnected
