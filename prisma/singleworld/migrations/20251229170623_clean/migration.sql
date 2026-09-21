@@ -309,6 +309,32 @@ CREATE TABLE "invite_attempt" (
     "created_at" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
+-- CreateTable
+CREATE TABLE "record_attempt" (
+    "id" INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+    "account_id" INTEGER NOT NULL,
+    "profile" TEXT NOT NULL,
+    "duration_seconds" INTEGER NOT NULL,
+    "state" TEXT NOT NULL DEFAULT 'running',
+    "reason" TEXT,
+    "initial_logout_at" DATETIME NOT NULL,
+    "started_at" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "final_logout_at" DATETIME,
+    "stopped_at" DATETIME,
+    "elapsed_ms" BIGINT
+);
+
+-- CreateTable
+CREATE TABLE "record_attempt_skill" (
+    "attempt_id" INTEGER NOT NULL,
+    "category" INTEGER NOT NULL,
+    "start_xp" BIGINT NOT NULL,
+    "end_xp" BIGINT,
+    "gained" BIGINT,
+
+    PRIMARY KEY ("attempt_id", "category")
+);
+
 -- CreateIndex
 CREATE UNIQUE INDEX "account_username_key" ON "account"("username");
 
@@ -417,3 +443,11 @@ CREATE INDEX "invite_claimed_by_account_id_idx" ON "invite"("claimed_by_account_
 -- CreateIndex
 CREATE INDEX "invite_attempt_ip_created_at_idx" ON "invite_attempt"("ip", "created_at");
 
+-- CreateIndex
+CREATE INDEX "record_attempt_account_id_started_at_idx" ON "record_attempt"("account_id", "started_at" DESC);
+
+-- CreateIndex
+CREATE INDEX "record_attempt_profile_duration_seconds_state_idx" ON "record_attempt"("profile", "duration_seconds", "state");
+
+-- CreateIndex
+CREATE INDEX "record_attempt_skill_category_gained_idx" ON "record_attempt_skill"("category", "gained" DESC);

@@ -478,3 +478,45 @@ model invite_attempt {
 
     @@index([ip, created_at])
 }
+
+// ---------------------------------------------------------------------------
+// records
+// ---------------------------------------------------------------------------
+//
+// Timed XP records, started and stopped from the website. The SQL API in
+// prisma/postgres/migrations/8_records owns the rules, including the partial
+// unique index - one running attempt per account - that Prisma cannot
+// express. Only valid attempts are public, and nothing is ever deleted.
+
+model record_attempt {
+    id Int @id @default(autoincrement())
+
+    account_id       Int
+    profile          String
+    duration_seconds Int
+
+    // state is 'running', 'valid', 'rejected', 'void' or 'abandoned'
+    state  String  @default("running")
+    reason String?
+
+    initial_logout_at DateTime
+    started_at        DateTime  @default(now())
+    final_logout_at   DateTime?
+    stopped_at        DateTime?
+    elapsed_ms        BigInt?
+
+    @@index([account_id, started_at(sort: Desc)])
+    @@index([profile, duration_seconds, state])
+}
+
+model record_attempt_skill {
+    attempt_id Int
+    // the hiscore type: 0 is Overall, 1..21 are the skills
+    category   Int
+    start_xp   BigInt
+    end_xp     BigInt?
+    gained     BigInt?
+
+    @@id([attempt_id, category])
+    @@index([category, gained(sort: Desc)])
+}
