@@ -166,13 +166,13 @@ the values back-filled.
 The postgres side has no baseline problem: `0_init` was never edited, and the
 later changes are their own migrations, `1_register_caps`, `2_website_login`,
 `3_message_centre`, `4_evidence_and_records`, `5_economy_categories`,
-`6_invites` and `7_staff_spawn_total`.
+`6_invites`, `7_staff_spawn_total` and `8_records`.
 
 #### The SQL API
 
 Postgres only. The `website` role has **no privilege on any table in `public`** —
 `select * from punishment` as `website` is refused, and so is every other table
-these functions read. What it has instead is `EXECUTE` on forty-four
+these functions read. What it has instead is `EXECUTE` on fifty-two
 `SECURITY DEFINER` functions in the `accounts` schema, each with
 `search_path` pinned to `public, pg_temp`, and that list is the entire surface a
 leaked website credential reaches. `4_evidence_and_records` adds twelve of them
@@ -258,6 +258,27 @@ functions are unbounded on purpose: only an item-creating cheat writes to
 `staff_spawn`, nothing has ever reaped it, and **nothing should** - a retention
 rule added later would not make the page fail, it would make it quietly lie.
 
+`8_records` adds timed XP records, started and stopped from the website, with
+no engine change: everything reads tables the login server already keeps. A
+player logs out of the game, presses Start (`record_start`), plays, logs out
+before the timer runs out, and presses Stop (`record_stop`). Both snapshots
+come from `hiscore` and `hiscore_large` while the player is logged out, so
+neither can be stale; the window is `started_at` to the **final logout**, the
+`account_login.logout_time` Stop finds, and over five minutes plus ten seconds
+of grace is rejected. Start and Stop both wait **five seconds past a logout**,
+because the login server writes `logged_in = 0` before it runs
+`updateHiscores`, and a snapshot inside that gap would read the hiscore from
+before the session just ended. A session that began after the last clean
+logout and ended some other way - a crash, or a forced logout, which saves
+nothing - makes the attempt `void` rather than the player's failure, and a
+void attempt does not count against the twelve starts an hour. Categories are
+hiscore types (0 Overall, 1..21 the skills), so nothing converts to stat ids.
+`record_board` publishes valid attempts only, best per player, with the hiscore
+views' staff and ban rule restated; `record_current` answers every name with
+exactly one row, because the account page polls it. There is no scheduler: an
+attempt nobody stopped reads as abandoned an hour after its window and is
+stored as such by the next Start, Stop or cancel. Nothing is reaped.
+
 `test/EvidenceSql.test.ts` reads the migration back and asserts the grant list,
 those retention windows, and that no `public_*` function so much as mentions an
 issuer or an address; `test/EconomyCategoriesSql.test.ts` does the same for
@@ -268,7 +289,11 @@ that gives a category empty for a week a low of 0 rather than no low.
 things a reader could not see from the SQL: that the total has no `GROUP BY`,
 so an empty table answers with a row instead of with nothing, and that no
 `reap()` in any migration mentions `staff_spawn`, so the page's "ever" stays
-true. Nothing in this repo executes the file — the proof that it
+true. `test/RecordsSql.test.ts` does it for migration 8 - the grant list, that
+the board lets through `valid` only, that `record_current` has no `GROUP BY`,
+the five-second wait, and that Stop checks for an unclean end before it blames
+the player - and `test/RecordsSchema.test.ts` holds its two tables the same in
+all five places. Nothing in this repo executes the file — the proof that it
 answers correctly is a throwaway postgres, never the live pooler.
 
 ## Reports and evidence

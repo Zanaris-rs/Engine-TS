@@ -142,6 +142,26 @@ export type punishment = {
     lifted_at: Timestamp | null;
     lifted_by_account_id: number | null;
 };
+export type record_attempt = {
+    id: Generated<number>;
+    account_id: number;
+    profile: string;
+    duration_seconds: number;
+    state: Generated<string>;
+    reason: string | null;
+    initial_logout_at: Timestamp;
+    started_at: Generated<Timestamp>;
+    final_logout_at: Timestamp | null;
+    stopped_at: Timestamp | null;
+    elapsed_ms: number | null;
+};
+export type record_attempt_skill = {
+    attempt_id: number;
+    category: number;
+    start_xp: number;
+    end_xp: number | null;
+    gained: number | null;
+};
 export type report = {
     id: Generated<number>;
     session_uuid: string;
@@ -265,6 +285,8 @@ export type DB = {
     private_chat: private_chat;
     public_chat: public_chat;
     punishment: punishment;
+    record_attempt: record_attempt;
+    record_attempt_skill: record_attempt_skill;
     report: report;
     report_chat: report_chat;
     report_input: report_input;
