@@ -123,7 +123,7 @@ test('the board shows valid attempts only, from players the hiscores show', () =
     assert.ok(board.includes("WHERE ra.state = 'valid'"), 'valid only');
     assert.ok(board.includes('AND a.staffmodlevel <= 1'), 'no staff above level 1, as the hiscore views');
     assert.ok(board.includes('AND (a.banned_until IS NULL OR a.banned_until < now())'), 'no banned players, as the hiscore views');
-    assert.ok(board.includes('AND ra.profile = accounts.public_profile()'), 'the profile is not the caller\'s to choose');
+    assert.ok(board.includes('AND ra.profile = accounts.public_profile()'), "the profile is not the caller's to choose");
     assert.ok(board.includes('AND s.gained > 0'), 'nothing gained is not a record');
     assert.ok(board.includes('SELECT DISTINCT ON (ra.account_id)'), 'one row per player, their best');
     assert.ok(board.includes('LIMIT least(greatest(coalesce(p_limit, 50), 1), 100)'), 'a clamped limit');
@@ -193,13 +193,13 @@ test('Stop blames the server before the player', () => {
     assert.ok(stop.includes('AND s.timestamp > greatest(coalesce(v_logout_time, v_started_at), v_started_at)'), 'a login newer than both Start and the last clean logout');
 });
 
-test('the window is Start to the final logout, and the grace is the durations table\'s', () => {
+test("the window is Start to the final logout, and the grace is the durations table's", () => {
     const stop = body('record_stop');
 
     assert.ok(stop.includes('v_elapsed := floor(extract(epoch FROM (v_logout_time - v_started_at)) * 1000)::bigint;'), 'elapsed from the logout, not the click');
     assert.ok(stop.includes('SELECT d.grace_seconds INTO v_grace FROM accounts.record_durations() d WHERE d.duration_seconds = v_duration;'), 'one source for the grace');
     assert.ok(stop.includes('IF v_elapsed > (v_duration + coalesce(v_grace, 0))::bigint * 1000 THEN'), 'over the duration plus its grace is over time');
-    assert.ok(body('record_durations').includes('VALUES (300, 10);'), 'five minutes, ten seconds of grace');
+    assert.ok(body('record_durations').includes('VALUES (300, 10);'), "five minutes, and migration 8's ten seconds of grace - migration 9 replaces it with two");
 });
 
 test('the cap is twelve starts an hour, and a void attempt is free', () => {

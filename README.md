@@ -166,7 +166,7 @@ the values back-filled.
 The postgres side has no baseline problem: `0_init` was never edited, and the
 later changes are their own migrations, `1_register_caps`, `2_website_login`,
 `3_message_centre`, `4_evidence_and_records`, `5_economy_categories`,
-`6_invites`, `7_staff_spawn_total` and `8_records`.
+`6_invites`, `7_staff_spawn_total`, `8_records` and `9_record_grace`.
 
 #### The SQL API
 
@@ -279,6 +279,17 @@ exactly one row, because the account page polls it. There is no scheduler: an
 attempt nobody stopped reads as abandoned an hour after its window and is
 stored as such by the next Start, Stop or cancel. Nothing is reaped.
 
+`9_record_grace` cuts that grace to **two seconds**: `record_durations()`
+answers `(300, 2)`, and nothing else changes - no table, no row, no other
+function, since `record_stop` and `record_current` both read the grace from it.
+Two seconds still covers the world's 600ms tick and the hop to the login server
+that writes `logout_time`; it no longer covers combat's logout lock (sixteen
+ticks, just under ten seconds), so getting out of combat and logging out before
+0:00 is the player's job, and the site says so. Stop reads the grace when it
+runs, so an attempt already running when this is applied is judged by two
+seconds; attempts already stopped keep their verdicts. The website's
+`lib/records/durations.ts` must say the same, and its `db:check` asserts it.
+
 `test/EvidenceSql.test.ts` reads the migration back and asserts the grant list,
 those retention windows, and that no `public_*` function so much as mentions an
 issuer or an address; `test/EconomyCategoriesSql.test.ts` does the same for
@@ -293,8 +304,13 @@ true. `test/RecordsSql.test.ts` does it for migration 8 - the grant list, that
 the board lets through `valid` only, that `record_current` has no `GROUP BY`,
 the five-second wait, and that Stop checks for an unclean end before it blames
 the player - and `test/RecordsSchema.test.ts` holds its two tables the same in
-all five places. Nothing in this repo executes the file — the proof that it
-answers correctly is a throwaway postgres, never the live pooler.
+all five places. `test/RecordGraceSql.test.ts` does it for migration 9: that it
+redefines `record_durations` alone, to `(300, 2)`, under a header identical to
+migration 8's - so `CREATE OR REPLACE` replaces the body and nothing else, and
+cannot trip on a changed return type - that its rollback puts the ten back,
+and that migration 8's Stop still reads the grace from it rather than keeping
+a number of its own. Nothing in this repo executes the file — the proof that
+it answers correctly is a throwaway postgres, never the live pooler.
 
 ## Reports and evidence
 
