@@ -18,7 +18,7 @@ import { toDisplayName } from '#/util/JString.js';
  * anything else one backend spells differently.
  *
  * The unread rule is one line, and it is a contract shared with the website
- * and with `accounts.unread()` in migration `3_message_centre`:
+ * and with `accounts.unread()` in migration `003_message_centre`:
  *
  *     count(*) from account_message where account_id = $1 and read_at is null
  *

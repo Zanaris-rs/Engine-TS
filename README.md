@@ -163,10 +163,18 @@ sqlite's `ALTER TABLE ADD COLUMN` demands a `DEFAULT ''` for them, so a table
 that predates the registration columns wants those two statements edited and
 the values back-filled.
 
-The postgres side has no baseline problem: `0_init` was never edited, and the
-later changes are their own migrations, `1_register_caps`, `2_website_login`,
-`3_message_centre`, `4_evidence_and_records`, `5_economy_categories`,
-`6_invites`, `7_staff_spawn_total`, `8_records` and `9_record_durations`.
+The postgres side has no baseline problem: `000_init` was never edited, and the
+later changes are their own migrations, `001_register_caps`, `002_website_login`,
+`003_message_centre`, `004_evidence_and_records`, `005_economy_categories`,
+`006_invites`, `007_staff_spawn_total`, `008_records`, `009_record_durations`
+and `010_invite_genealogy`.
+
+Postgres migrations are numbered with **three digits** (`011_next_thing`).
+Prisma applies a directory's migrations in the order their names sort as text,
+so `10_x` would run between `0_init` and `1_register_caps` on an empty
+database. They were `0_init` .. `10_invite_genealogy` until 2026-09-23, and
+production's `_prisma_migrations` rows were renamed to match in the same
+change. `test/MigrationNames.test.ts` fails on a name that breaks the rule.
 
 #### The SQL API
 
@@ -175,7 +183,7 @@ Postgres only. The `website` role has **no privilege on any table in `public`** 
 these functions read. What it has instead is `EXECUTE` on fifty-three
 `SECURITY DEFINER` functions in the `accounts` schema, each with
 `search_path` pinned to `public, pg_temp`, and that list is the entire surface a
-leaked website credential reaches. `4_evidence_and_records` adds twelve of them
+leaked website credential reaches. `004_evidence_and_records` adds twelve of them
 and replaces two:
 
 - **staff** (`staff_report`, `staff_report_input`, `staff_report_chat`,
@@ -191,7 +199,7 @@ and replaces two:
   Resolving a report as `dismissed` deletes its `report_input` and `report_chat`
   rows immediately. All three leave a `staff_action` row.
 - **public** (`public_punishments`, `public_economy`, `public_economy_flow`,
-  `public_staff_spawns`, and `5_economy_categories`' `public_economy_latest`
+  `public_staff_spawns`, and `005_economy_categories`' `public_economy_latest`
   and `public_economy_group_range`) — the transparency reads. They select only the public
   columns: no issuing or lifting moderator, no account id, no address, no name
   on a census or a spawn. The census functions read one profile — `main`, from
@@ -200,7 +208,7 @@ and replaces two:
   `website` could have pointed `/economy` at any profile with one `SET`.
   Changing it is a migration.
 
-  `5_economy_categories` adds the other two. `public_economy_latest` returns the
+  `005_economy_categories` adds the other two. `public_economy_latest` returns the
   newest snapshot's `items` column — the whole census, every id in the game,
   which `public_economy` deliberately does not return — and
   `public_economy_group_range` gives each category's lowest and highest total
@@ -231,7 +239,7 @@ about 86,000 rows a day at thirty players, forever, read by nothing. **Leave it
 off**; if a fleet ever needs it, it needs a retention rule in the same
 migration.
 
-`6_invites` makes registration invite-only, replacing `accounts.register` with
+`006_invites` makes registration invite-only, replacing `accounts.register` with
 nine functions. `invite_preview` answers the `/join/<code>` door without
 spending anything; `register_with_invite` takes a single-use code as its first
 argument and claims it in the same statement that creates the account.
@@ -241,11 +249,11 @@ a trigger on `account.banned_until` turns it off and revokes the account's
 live links. Players read and manage their own links through `invites`,
 `invite_create` and `invite_revoke`, and see their own citizen number and
 inviter through `citizen`; staff see `staff_inviters` and `staff_invite_tree`, and
-`10_invite_genealogy` adds `staff_invite_genealogy`: every account with the
+`010_invite_genealogy` adds `staff_invite_genealogy`: every account with the
 account whose link it claimed, for the staff genealogy page.
 `invite` rows that were claimed are never reaped.
 
-`7_staff_spawn_total` lets /economy say "ever". `public_staff_spawns` clamps
+`007_staff_spawn_total` lets /economy say "ever". `public_staff_spawns` clamps
 its argument to 1..90 days and stops at 500 rows, and does both silently, so a
 page headlining "0 items ever created by staff" from that read would be
 printing a claim it had not checked. `public_staff_spawn_total` takes no
@@ -260,7 +268,7 @@ functions are unbounded on purpose: only an item-creating cheat writes to
 `staff_spawn`, nothing has ever reaped it, and **nothing should** - a retention
 rule added later would not make the page fail, it would make it quietly lie.
 
-`8_records` adds timed XP records, started and stopped from the website, with
+`008_records` adds timed XP records, started and stopped from the website, with
 no engine change: everything reads tables the login server already keeps. A
 player logs out of the game, presses Start (`record_start`), plays, logs out
 before the timer runs out, and presses Stop (`record_stop`). Both snapshots
@@ -281,7 +289,7 @@ exactly one row, because the account page polls it. There is no scheduler: an
 attempt nobody stopped reads as abandoned an hour after its window and is
 stored as such by the next Start, Stop or cancel. Nothing is reaped.
 
-`9_record_durations` makes a record five minutes, six hours or twenty-four
+`009_record_durations` makes a record five minutes, six hours or twenty-four
 hours. It is one `CREATE OR REPLACE`: `record_durations()` answers three rows
 where it answered one, and every rule above already reads the duration from
 that row - Start refuses a duration the list does not have, Stop takes the

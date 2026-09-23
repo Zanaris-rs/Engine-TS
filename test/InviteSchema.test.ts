@@ -19,7 +19,7 @@ function modelBody(schema: string, model: string): string {
     return body.slice(0, body.indexOf('\n}'));
 }
 
-const postgresMigration = read('../prisma/postgres/migrations/6_invites/migration.sql');
+const postgresMigration = read('../prisma/postgres/migrations/006_invites/migration.sql');
 const mysqlMigration = read('../prisma/multiworld/migrations/20260916000000_invites/migration.sql');
 const sqliteBaseline = read('../prisma/singleworld/migrations/20251229170623_clean/migration.sql');
 

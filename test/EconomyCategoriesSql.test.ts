@@ -19,7 +19,7 @@ function read(path: string): string {
     return readFileSync(new URL(path, import.meta.url), 'utf8');
 }
 
-const migration = read('../prisma/postgres/migrations/5_economy_categories/migration.sql');
+const migration = read('../prisma/postgres/migrations/005_economy_categories/migration.sql');
 
 const ROLLBACK = '\n-- rollback:';
 assert.ok(migration.includes(ROLLBACK), 'the rollback block is the boundary this file reads to');

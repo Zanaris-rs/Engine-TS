@@ -20,7 +20,7 @@ function read(path: string): string {
     return readFileSync(new URL(path, import.meta.url), 'utf8');
 }
 
-const migration = read('../prisma/postgres/migrations/4_evidence_and_records/migration.sql');
+const migration = read('../prisma/postgres/migrations/004_evidence_and_records/migration.sql');
 
 // The rollback block at the bottom is commented out, and it contains whole
 // function definitions. Everything below the marker is prose as far as this
@@ -115,7 +115,7 @@ test('every function loses the PUBLIC default, and only the API is granted to we
     }
 
     // 12 new + staff_reports and reap, which this migration replaces and which
-    // 3_message_centre and 2_website_login had already granted. The closing
+    // 003_message_centre and 002_website_login had already granted. The closing
     // comment counts them, and a reader checks the count rather than the list.
     assert.equal(granted.length, 14);
     assert.ok(live.includes('Fourteen GRANT statements above'), 'the closing comment counts the grants');
@@ -219,7 +219,7 @@ test('the evidence window is thirty minutes before the report and fifteen after'
 test('the reaper keeps wealth seven days and evidence thirty, and never touches chat', () => {
     const { body } = defined.get('reap')!;
 
-    // 2_website_login's two rules, unchanged.
+    // 002_website_login's two rules, unchanged.
     assert.ok(body.includes("DELETE FROM public.signup_attempt WHERE created_at < now() - interval '24 hours'"), 'signup_attempt: 24 hours');
     assert.ok(body.includes("DELETE FROM public.login_attempt WHERE created_at < now() - interval '1 hour'"), 'login_attempt: 1 hour');
 
@@ -279,7 +279,7 @@ test("every read of a player's sessions is pinned to one profile", () => {
     // One database serves every profile a fleet runs, and an account with a
     // character on main and one on beta is the same `account_id` on both. A
     // session lookup with no profile in it is therefore both a sequential scan
-    // (2_website_login's only index on `session` leads with profile) and an
+    // (002_website_login's only index on `session` leads with profile) and an
     // answer that can come from the wrong world - a beta trade quoted inside
     // the window of a report filed on main.
     //

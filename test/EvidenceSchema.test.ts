@@ -29,7 +29,7 @@ function modelBody(schema: string, model: string): string {
     return body.slice(0, body.indexOf('\n}'));
 }
 
-const postgresMigration = read('../prisma/postgres/migrations/4_evidence_and_records/migration.sql');
+const postgresMigration = read('../prisma/postgres/migrations/004_evidence_and_records/migration.sql');
 const mysqlMigration = read('../prisma/multiworld/migrations/20260908000000_evidence_and_records/migration.sql');
 
 const schemas = {
@@ -49,7 +49,7 @@ const TABLES = ['report_input', 'report_chat', 'punishment', 'staff_spawn', 'eco
 const REPORT_COLUMNS = ['uuid', 'offender_account_id', 'offender_session_uuid', 'offender_coord', 'resolved_at', 'resolution', 'resolved_by_account_id', 'staff_note'];
 
 // Every index migration 4 creates, including the ones on the three log tables
-// that have been unindexed since 0_init and now have both a reader and a
+// that have been unindexed since 000_init and now have both a reader and a
 // retention sweep.
 const INDEXES = [
     'report_uuid_idx',
@@ -75,7 +75,7 @@ test('the postgres migration creates every new table, with RLS on and no policy'
         assert.ok(postgresMigration.includes(`ALTER TABLE "${table}" ENABLE ROW LEVEL SECURITY;`), `RLS ${table}`);
     }
 
-    // 0_init's rule, still: RLS on with no policies means nothing reaches these
+    // 000_init's rule, still: RLS on with no policies means nothing reaches these
     // rows except a SECURITY DEFINER function running as the owner.
     assert.ok(!postgresMigration.includes('CREATE POLICY'), 'no policies');
 

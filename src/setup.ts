@@ -143,7 +143,7 @@ async function handleManagementRequest(req: Request): Promise<Response> {
             saveWorldConfig(config);
 
             const hasSupportServer = config.login.enabled || config.friend.enabled || config.logger.enabled;
-            // postgres is never migrated from here: 0_init creates roles and grants,
+            // postgres is never migrated from here: 000_init creates roles and grants,
             // so it is run deliberately with `npm run postgres:migrate`
             const shouldRunMigration = hasSupportServer && config.db.backend !== 'postgres' && config.db.host.trim().toLowerCase() === 'localhost';
             if (shouldRunMigration) {
