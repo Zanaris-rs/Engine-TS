@@ -64,18 +64,27 @@ test("the header is migration 8's, so CREATE OR REPLACE swaps the body and nothi
     assert.equal(mine.header, theirs.header);
 });
 
-test('five minutes, six hours and a day, with ten seconds of grace each', () => {
+test('five minutes, six hours and a day, with two seconds of grace each', () => {
     // 21600 is six hours and 86400 is a day. The website's lib/records/durations.ts
     // owns the words for them, and its `npm run db:check` asserts the two lists agree.
-    assert.ok(defined.get('record_durations')?.body.includes('VALUES (300, 10), (21600, 10), (86400, 10);'));
+    assert.ok(defined.get('record_durations')?.body.includes('VALUES (300, 2), (21600, 2), (86400, 2);'));
 });
 
-test('the five-minute row keeps the grace migration 8 gave it', () => {
-    // Website#14 put the site back to ten after the two-second migration was
-    // closed unapplied. Adding durations must not quietly re-open that.
-    const mine = defined.get('record_durations')?.body ?? '';
-    assert.ok(mine.includes('(300, 10)'), 'five minutes still has ten seconds');
-    assert.ok(!/\(300,\s*(?!10\b)\d+\)/.test(mine), 'and no other grace for five minutes');
+test('one grace for all three, and it is the two seconds the owner asked for', () => {
+    // The grace lives in exactly one place. Two seconds covers the world's tick
+    // and the login server's write of the logout, and nothing for a player still
+    // in combat at 0:00 - which is why it is worth a test of its own: a duration
+    // added later with a grace of its own would be a rule nobody wrote down.
+    const rows = [...(defined.get('record_durations')?.body ?? '').matchAll(/\((\d+),\s*(\d+)\)/g)];
+
+    assert.deepEqual(
+        rows.map(row => [Number(row[1]), Number(row[2])]),
+        [
+            [300, 2],
+            [21600, 2],
+            [86400, 2]
+        ]
+    );
 });
 
 test('no table and no row changes', () => {

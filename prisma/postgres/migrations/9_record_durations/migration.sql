@@ -25,21 +25,37 @@
 -- No table, no row, no new function, and nothing to backfill. The attempts
 -- already stopped are all five-minute ones and keep their verdicts.
 --
--- ## The grace is ten seconds for all three
+-- ## The grace is two seconds for all three
 --
--- It covers the tick the world takes to act on a logout, the hop to the login
--- server that writes `account_login.logout_time`, and combat's logout lock
--- (sixteen ticks, just under ten seconds). That is the same ten seconds
--- migration 8 gave five minutes, for the same three reasons, and against six
--- hours or a day it is noise. Migration `9_record_grace` would have cut it to
--- two; the owner closed it unapplied on 2026-09-22, and the website is back at
--- ten (Website#14), so ten is what both sides say.
+-- Migration 8 gave five minutes ten, and said what the ten covered: "the tick
+-- the world takes to act on a logout, the hop to the login server, and
+-- combat's logout lock". The owner cut it to two on 2026-09-23, which is the
+-- cut migration `9_record_grace` would have made (closed unapplied on
+-- 2026-09-22, "perhaps adjust later") applied here instead, to all three
+-- durations at once.
 --
--- **That branch is the one hazard here.** `9_record_grace` replaces this same
--- function and is numbered 9 as well. If it is ever revived it must be
--- renumbered and rebuilt on top of this file - a `CREATE OR REPLACE` answering
--- `(300, 2)` applied after this one would take six hours and a day away again,
--- with nothing to say it had. `test/RecordDurationsSql.test.ts` fails if two
+-- Two seconds still covers the first two. The world acts on a logout within
+-- its 600ms tick, and the login server writes `account_login.logout_time` -
+-- the final logout Stop measures to - one hop after that. It no longer covers
+-- combat's logout lock, which keeps a player in the game for sixteen ticks,
+-- just under ten seconds, after they are last attacked. Getting out of combat
+-- in time to log out before 0:00 is the player's job, as logging out at all
+-- always was, and the site says so up front: "YOU must log out before the
+-- timer reaches 0:00". A six-hour window does not make that easier or harder
+-- than a five-minute one: the last seconds are the last seconds.
+--
+-- `record_stop` reads the grace at Stop time, so an attempt already running
+-- when this is applied is judged by two seconds, not by the ten it started
+-- under. An attempt already stopped keeps its verdict - `state` and `reason`
+-- were written at Stop and nothing here touches them - so the five-minute
+-- records already on the board stay on it. `record_current` reports the grace
+-- from this same row, so for the newest such attempt it says two.
+--
+-- **`9_record_grace` is the one hazard here.** It replaces this same function,
+-- is numbered 9 as well, and now says less than this file does: `(300, 2)`
+-- alone. Applied after this one it would take six hours and a day away with
+-- nothing to say it had, so it should be deleted rather than revived - the
+-- grace it wanted is here. `test/RecordDurationsSql.test.ts` fails if two
 -- migration directories ever share a number.
 --
 -- ## What a longer window means for a player
@@ -66,8 +82,9 @@
 -- ---------------------------------------------------------------------------
 
 -- Every duration a record can be, and the grace after it. Five minutes, six
--- hours and twenty-four hours; ten seconds past each, which is the world's
--- tick, the login server's write of the logout, and combat's logout lock.
+-- hours and twenty-four hours; two seconds past each, which is the world's
+-- tick and the login server's write of the logout, and nothing for a player
+-- still in combat at 0:00.
 --
 -- The header below is migration 8's character for character - `CREATE OR
 -- REPLACE` cannot change a return type, and a different argument list would
@@ -75,7 +92,7 @@
 CREATE OR REPLACE FUNCTION accounts.record_durations()
 RETURNS TABLE (duration_seconds int, grace_seconds int)
 LANGUAGE sql IMMUTABLE SECURITY DEFINER SET search_path = public, pg_temp AS $$
-    VALUES (300, 10), (21600, 10), (86400, 10);
+    VALUES (300, 2), (21600, 2), (86400, 2);
 $$;
 
 -- ---------------------------------------------------------------------------
@@ -91,15 +108,17 @@ GRANT EXECUTE ON FUNCTION accounts.record_durations() TO website;
 
 -- rollback:
 --
--- Puts migration 8's one row back. A five-minute attempt is unaffected either
--- way; a six-hour or day-long attempt still running when this is rolled back
--- keeps its `duration_seconds` and is still stopped by `record_stop`, but with
--- no grace row to join it is judged by `coalesce(v_grace, 0)` - the window
--- exactly, no grace - and `record_current` reports its grace as null. Stop the
--- long attempts, or leave the row in, before rolling this back in anger.
+-- Puts migration 8's one row back: five minutes alone, and with the ten
+-- seconds of grace this file cut to two. A five-minute attempt still running
+-- is then judged by ten again, which can only turn a rejection into a record
+-- and never the other way about. A six-hour or day-long attempt keeps its
+-- `duration_seconds` and is still stopped by `record_stop`, but with no row of
+-- its own to join it is judged by `coalesce(v_grace, 0)` - the window exactly,
+-- no grace - and `record_current` reports its grace as null. Stop the long
+-- attempts, or leave the rows in, before rolling this back in anger.
 --
--- The website's `lib/records/durations.ts` goes back to five minutes alone in
--- the same breath, or db:check says the two disagree.
+-- The website's `lib/records/durations.ts` goes back to five minutes alone, at
+-- ten seconds, in the same breath, or db:check says the two disagree.
 --
 -- CREATE OR REPLACE FUNCTION accounts.record_durations()
 -- RETURNS TABLE (duration_seconds int, grace_seconds int)
