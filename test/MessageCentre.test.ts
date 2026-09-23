@@ -45,7 +45,7 @@ const fixture = JSON.parse(readFileSync(new URL('./fixtures/message-centre-contr
 // The SQL API is the thing that actually enforces the limits, and the website
 // reads them from the fixture rather than hard-coding them. Reading the
 // migration back is what stops the two drifting.
-const migration = readFileSync(new URL('../prisma/postgres/migrations/3_message_centre/migration.sql', import.meta.url), 'utf8');
+const migration = readFileSync(new URL('../prisma/postgres/migrations/003_message_centre/migration.sql', import.meta.url), 'utf8');
 
 // No driver, so nothing connects: these compile queries and throw the plan
 // away, which is the only way to test the SQL text without a database.

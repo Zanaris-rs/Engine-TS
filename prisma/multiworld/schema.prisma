@@ -32,7 +32,7 @@ model account {
     staffmodlevel Int     @default(0)
     members       Boolean @default(false)
 
-    // off until staff switch it on; see migrations/6_invites
+    // off until staff switch it on; see migrations/006_invites
     invites_enabled Boolean @default(false)
 
     @@index([email_normalized])
@@ -251,7 +251,7 @@ model input_report {
 // which is both the number the login server puts on the client's welcome
 // screen and the number the website's Message Centre shows. No foreign keys,
 // like every other table here; the SQL API in
-// prisma/postgres/migrations/3_message_centre owns the rules the website is
+// prisma/postgres/migrations/003_message_centre owns the rules the website is
 // allowed to rely on.
 
 model account_message {
@@ -323,7 +323,7 @@ model staff_action {
 // ---------------------------------------------------------------------------
 //
 // No foreign keys, like every other table here; the SQL API in
-// prisma/postgres/migrations/4_evidence_and_records owns the rules the website
+// prisma/postgres/migrations/004_evidence_and_records owns the rules the website
 // is allowed to rely on, and nothing outside a SECURITY DEFINER function ever
 // reads these rows. Evidence lives 30 days or until the report is dismissed,
 // whichever comes first.
@@ -454,7 +454,7 @@ model economy_flow {
 // ---------------------------------------------------------------------------
 //
 // Registration is by invitation only. The SQL API in
-// prisma/postgres/migrations/6_invites owns the rules. Claimed rows are the
+// prisma/postgres/migrations/006_invites owns the rules. Claimed rows are the
 // invite tree and are never deleted.
 
 model invite {
@@ -489,7 +489,7 @@ model invite_attempt {
 // ---------------------------------------------------------------------------
 //
 // Timed XP records, started and stopped from the website. The SQL API in
-// prisma/postgres/migrations/8_records owns the rules, including the partial
+// prisma/postgres/migrations/008_records owns the rules, including the partial
 // unique index - one running attempt per account - that Prisma cannot
 // express. Only valid attempts are public, and nothing is ever deleted.
 
