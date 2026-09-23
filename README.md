@@ -166,7 +166,7 @@ the values back-filled.
 The postgres side has no baseline problem: `0_init` was never edited, and the
 later changes are their own migrations, `1_register_caps`, `2_website_login`,
 `3_message_centre`, `4_evidence_and_records`, `5_economy_categories`,
-`6_invites`, `7_staff_spawn_total` and `8_records`.
+`6_invites`, `7_staff_spawn_total`, `8_records` and `9_record_durations`.
 
 #### The SQL API
 
@@ -264,7 +264,7 @@ player logs out of the game, presses Start (`record_start`), plays, logs out
 before the timer runs out, and presses Stop (`record_stop`). Both snapshots
 come from `hiscore` and `hiscore_large` while the player is logged out, so
 neither can be stale; the window is `started_at` to the **final logout**, the
-`account_login.logout_time` Stop finds, and over five minutes plus ten seconds
+`account_login.logout_time` Stop finds, and over the duration plus ten seconds
 of grace is rejected. Start and Stop both wait **five seconds past a logout**,
 because the login server writes `logged_in = 0` before it runs
 `updateHiscores`, and a snapshot inside that gap would read the hiscore from
@@ -278,6 +278,25 @@ views' staff and ban rule restated; `record_current` answers every name with
 exactly one row, because the account page polls it. There is no scheduler: an
 attempt nobody stopped reads as abandoned an hour after its window and is
 stored as such by the next Start, Stop or cancel. Nothing is reaped.
+
+`9_record_durations` makes a record five minutes, six hours or twenty-four
+hours. It is one `CREATE OR REPLACE`: `record_durations()` answers three rows
+where it answered one, and every rule above already reads the duration from
+that row - Start refuses a duration the list does not have, Stop takes the
+grace from it, the abandoned cutoff is an hour past *its own* window, and the
+boards are keyed by `duration_seconds`, so three durations are three boards
+with no other line changed. It also cuts the grace to **two seconds** for all
+three, which is the cut `9_record_grace` would have made, made here instead:
+two seconds covers the world's tick and the login server's write of the
+logout, and no longer covers combat's logout lock (sixteen ticks), so leaving
+combat in time to log out before 0:00 is the player's job. Stop reads the
+grace at Stop time, so an attempt already running is judged by two; an attempt
+already stopped keeps its verdict. One running attempt per account still, so a
+day-long attempt has to be stopped or cancelled before a five-minute one can
+start - they would otherwise be measuring the same final logout twice.
+**Delete `9_record_grace` rather than reviving it**: it replaces the same
+function under the same number and now says less than this does, so applied
+second it would take six hours and a day away with nothing to say so.
 
 `test/EvidenceSql.test.ts` reads the migration back and asserts the grant list,
 those retention windows, and that no `public_*` function so much as mentions an
@@ -293,7 +312,11 @@ true. `test/RecordsSql.test.ts` does it for migration 8 - the grant list, that
 the board lets through `valid` only, that `record_current` has no `GROUP BY`,
 the five-second wait, and that Stop checks for an unclean end before it blames
 the player - and `test/RecordsSchema.test.ts` holds its two tables the same in
-all five places. Nothing in this repo executes the file — the proof that it
+all five places. `test/RecordDurationsSql.test.ts` does it for migration 9: the
+three rows, that the header is migration 8's so the replace swaps a body and
+nothing else, that no table is touched, and that no two migration directories
+share a number, which is what would let the closed grace branch overwrite this
+one unnoticed. Nothing in this repo executes the file — the proof that it
 answers correctly is a throwaway postgres, never the live pooler.
 
 ## Reports and evidence
