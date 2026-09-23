@@ -172,7 +172,7 @@ later changes are their own migrations, `1_register_caps`, `2_website_login`,
 
 Postgres only. The `website` role has **no privilege on any table in `public`** —
 `select * from punishment` as `website` is refused, and so is every other table
-these functions read. What it has instead is `EXECUTE` on fifty-two
+these functions read. What it has instead is `EXECUTE` on fifty-three
 `SECURITY DEFINER` functions in the `accounts` schema, each with
 `search_path` pinned to `public, pg_temp`, and that list is the entire surface a
 leaked website credential reaches. `4_evidence_and_records` adds twelve of them
@@ -240,7 +240,9 @@ argument and claims it in the same statement that creates the account.
 a trigger on `account.banned_until` turns it off and revokes the account's
 live links. Players read and manage their own links through `invites`,
 `invite_create` and `invite_revoke`, and see their own citizen number and
-inviter through `citizen`; staff see `staff_inviters` and `staff_invite_tree`.
+inviter through `citizen`; staff see `staff_inviters` and `staff_invite_tree`, and
+`10_invite_genealogy` adds `staff_invite_genealogy`: every account with the
+account whose link it claimed, for the staff genealogy page.
 `invite` rows that were claimed are never reaped.
 
 `7_staff_spawn_total` lets /economy say "ever". `public_staff_spawns` clamps
