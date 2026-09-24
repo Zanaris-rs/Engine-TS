@@ -6,9 +6,11 @@ import { WebSocket, WebSocketServer } from 'ws';
 
 import { fromDbDate } from '#/db/DateFormat.js';
 import { db, toDbDate } from '#/db/query.js';
+import type Player from '#/engine/entity/Player.js';
 import { PlayerLoading } from '#/engine/entity/PlayerLoading.js';
 import Packet from '#/io/Packet.js';
 import { INTERNAL_MAX_PAYLOAD } from '#/server/InternalClient.js';
+import { lookOf, recordAdventure } from '#/server/login/Adventure.js';
 import { updateHiscores } from '#/server/login/Hiscores.js';
 import { handleWithFailureReply, retryReply, type ReplyId, type SendReply } from '#/server/login/LoginMessage.js';
 import {
@@ -29,6 +31,11 @@ import { toSafeName } from '#/util/JString.js';
 import { printInfo } from '#/util/Logger.js';
 import { startManagementWeb } from '#/web.js';
 import InvType from '#/cache/config/InvType.js';
+
+/** The look a loaded save holds, for `account_look`. */
+function lookOfPlayer(player: Player) {
+    return lookOf(player.body, player.colors, player.gender, player.getInventory(InvType.WORN));
+}
 
 async function loadAccount(username: string, profile: string) {
     return await db
@@ -517,15 +524,17 @@ export default class LoginServer {
                             this.loginRequests.delete(safeName);
                         }
                     } else if (type === 'player_logout') {
-                        const { replyTo, username, save } = msg;
+                        const { replyTo, username, save, adventure } = msg;
 
                         const raw = Buffer.from(save, 'base64');
+                        let saved = false;
                         if (PlayerLoading.verify(new Packet(raw)) && !(await this.wouldResetSaveFile(raw, profile, username))) {
                             if (!fs.existsSync(`data/players/${profile}`)) {
                                 await fsp.mkdir(`data/players/${profile}`, { recursive: true });
                             }
 
                             await fsp.writeFile(`data/players/${profile}/${username}.sav`, raw);
+                            saved = true;
                         } else {
                             console.error(username, 'Invalid save file');
                         }
@@ -554,9 +563,16 @@ export default class LoginServer {
                         // after the reply on purpose: the world only needs to know the
                         // save landed, and a hiscore failure must not turn an
                         // acknowledged logout into a retry
-                        await updateHiscores(account, PlayerLoading.load(username, new Packet(raw), null), profile);
+                        const player = PlayerLoading.load(username, new Packet(raw), null);
+                        await updateHiscores(account, player, profile);
+
+                        // only with a save that was written: the log must not keep
+                        // what the save it came with did not
+                        if (saved) {
+                            await recordAdventure(account, profile, lookOfPlayer(player), adventure);
+                        }
                     } else if (type === 'player_autosave') {
-                        const { username, save } = msg;
+                        const { username, save, adventure } = msg;
 
                         const raw = Buffer.from(save, 'base64');
                         if (PlayerLoading.verify(new Packet(raw)) && !(await this.wouldResetSaveFile(raw, profile, username))) {
@@ -573,7 +589,9 @@ export default class LoginServer {
                         // hiscores would otherwise only move on a clean logout, so a
                         // player who never logs off cleanly never appears at all
                         const account = await loadAccount(username, profile);
-                        await updateHiscores(account, PlayerLoading.load(username, new Packet(raw), null), profile);
+                        const player = PlayerLoading.load(username, new Packet(raw), null);
+                        await updateHiscores(account, player, profile);
+                        await recordAdventure(account, profile, lookOfPlayer(player), adventure);
                     } else if (type === 'player_force_logout') {
                         const { username } = msg;
 

@@ -537,3 +537,39 @@ model record_attempt_skill {
     @@id([attempt_id, category])
     @@index([category, gained(sort: Desc)])
 }
+
+// The Adventurer Log's raw material (011_adventure_capture): ADVENTURE session
+// log lines, stored by the login server once the save they came with is
+// written. (session_uuid, seq) is unique, so a retried logout adds nothing.
+// category: 0 other, 1 level, 2 milestone, 3 quest, 4 drop, 5 clue,
+// 6 random event, 7 tutorial (src/server/login/Adventure.ts).
+model adventure_event {
+    id Int @id @default(autoincrement())
+
+    account_id   Int
+    profile      String
+    session_uuid String
+    seq          Int
+    occurred_at  DateTime @db.Timestamptz(3)
+    category     Int
+    event        String
+
+    @@unique([session_uuid, seq])
+    @@index([account_id, profile, occurred_at(sort: Desc)])
+}
+
+// The body and worn items of a player's last save, for the website's "import
+// from game". kits, colours and worn are JSON arrays of ints.
+model account_look {
+    account_id Int
+    profile    String
+
+    gender  Int
+    kits    String
+    colours String
+    worn    String
+
+    updated_at DateTime @default(now()) @db.Timestamptz(3)
+
+    @@id([account_id, profile])
+}

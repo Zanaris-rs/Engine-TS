@@ -27,6 +27,15 @@ export type account_login = {
     logged_out: Generated<number>;
     logout_time: Timestamp | null;
 };
+export type account_look = {
+    account_id: number;
+    profile: string;
+    gender: number;
+    kits: string;
+    colours: string;
+    worn: string;
+    updated_at: Generated<Timestamp>;
+};
 export type account_message = {
     id: Generated<number>;
     account_id: number;
@@ -37,6 +46,16 @@ export type account_message = {
     created_by_account_id: number | null;
     created_at: Generated<Timestamp>;
     read_at: Timestamp | null;
+};
+export type adventure_event = {
+    id: Generated<number>;
+    account_id: number;
+    profile: string;
+    session_uuid: string;
+    seq: number;
+    occurred_at: Timestamp;
+    category: number;
+    event: string;
 };
 export type economy_flow = {
     id: Generated<number>;
@@ -270,7 +289,9 @@ export type ticket_message = {
 export type DB = {
     account: account;
     account_login: account_login;
+    account_look: account_look;
     account_message: account_message;
+    adventure_event: adventure_event;
     economy_flow: economy_flow;
     economy_snapshot: economy_snapshot;
     friendlist: friendlist;

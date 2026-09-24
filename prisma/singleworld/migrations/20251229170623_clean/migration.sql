@@ -335,6 +335,31 @@ CREATE TABLE "record_attempt_skill" (
     PRIMARY KEY ("attempt_id", "category")
 );
 
+-- CreateTable
+CREATE TABLE "adventure_event" (
+    "id" INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+    "account_id" INTEGER NOT NULL,
+    "profile" TEXT NOT NULL,
+    "session_uuid" TEXT NOT NULL,
+    "seq" INTEGER NOT NULL,
+    "occurred_at" DATETIME NOT NULL,
+    "category" INTEGER NOT NULL,
+    "event" TEXT NOT NULL
+);
+
+-- CreateTable
+CREATE TABLE "account_look" (
+    "account_id" INTEGER NOT NULL,
+    "profile" TEXT NOT NULL,
+    "gender" INTEGER NOT NULL,
+    "kits" TEXT NOT NULL,
+    "colours" TEXT NOT NULL,
+    "worn" TEXT NOT NULL,
+    "updated_at" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    PRIMARY KEY ("account_id", "profile")
+);
+
 -- CreateIndex
 CREATE UNIQUE INDEX "account_username_key" ON "account"("username");
 
@@ -451,3 +476,9 @@ CREATE INDEX "record_attempt_profile_duration_seconds_state_idx" ON "record_atte
 
 -- CreateIndex
 CREATE INDEX "record_attempt_skill_category_gained_idx" ON "record_attempt_skill"("category", "gained" DESC);
+
+-- CreateIndex
+CREATE UNIQUE INDEX "adventure_event_session_uuid_seq_key" ON "adventure_event"("session_uuid", "seq");
+
+-- CreateIndex
+CREATE INDEX "adventure_event_account_id_profile_occurred_at_idx" ON "adventure_event"("account_id", "profile", "occurred_at" DESC);
