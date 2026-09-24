@@ -573,3 +573,23 @@ model account_look {
 
     @@id([account_id, profile])
 }
+
+// Fashionscape (012_adventure_outfits): up to ten looks per account, slot
+// 0..9, one of them the default whose chathead is the player's picture.
+// kits, colours and worn are JSON arrays of ints, as in account_look. At most
+// one default per account is a partial unique index, in postgres only.
+model adventure_outfit {
+    account_id Int
+    slot       Int
+
+    name    String
+    gender  Int
+    kits    String
+    colours String
+    worn    String
+
+    is_default Boolean  @default(false)
+    updated_at DateTime @default(now()) @db.Timestamptz(3)
+
+    @@id([account_id, slot])
+}

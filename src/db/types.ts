@@ -57,6 +57,17 @@ export type adventure_event = {
     category: number;
     event: string;
 };
+export type adventure_outfit = {
+    account_id: number;
+    slot: number;
+    name: string;
+    gender: number;
+    kits: string;
+    colours: string;
+    worn: string;
+    is_default: Generated<boolean>;
+    updated_at: Generated<Timestamp>;
+};
 export type economy_flow = {
     id: Generated<number>;
     taken_at: Generated<Timestamp>;
@@ -292,6 +303,7 @@ export type DB = {
     account_look: account_look;
     account_message: account_message;
     adventure_event: adventure_event;
+    adventure_outfit: adventure_outfit;
     economy_flow: economy_flow;
     economy_snapshot: economy_snapshot;
     friendlist: friendlist;
