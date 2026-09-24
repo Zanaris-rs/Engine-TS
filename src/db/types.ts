@@ -47,6 +47,11 @@ export type account_message = {
     created_at: Generated<Timestamp>;
     read_at: Timestamp | null;
 };
+export type adventure_block = {
+    owner_account_id: number;
+    blocked_account_id: number;
+    created_at: Generated<Timestamp>;
+};
 export type adventure_event = {
     id: Generated<number>;
     account_id: number;
@@ -56,6 +61,15 @@ export type adventure_event = {
     occurred_at: Timestamp;
     category: number;
     event: string;
+};
+export type adventure_log_profile = {
+    account_id: number;
+    headline: Generated<string>;
+    about: Generated<string>;
+    custom_css: Generated<string>;
+    css_disabled_at: Timestamp | null;
+    hidden_categories: Generated<number>;
+    updated_at: Generated<Timestamp>;
 };
 export type adventure_outfit = {
     account_id: number;
@@ -67,6 +81,35 @@ export type adventure_outfit = {
     worn: string;
     is_default: Generated<boolean>;
     updated_at: Generated<Timestamp>;
+};
+export type adventure_reply = {
+    id: Generated<number>;
+    update_id: number;
+    author_account_id: number;
+    body: string;
+    created_at: Generated<Timestamp>;
+    deleted_at: Timestamp | null;
+    staff_hidden_at: Timestamp | null;
+};
+export type adventure_report = {
+    id: Generated<number>;
+    reporter_account_id: number;
+    target_kind: string;
+    target_id: number;
+    reason: string;
+    created_at: Generated<Timestamp>;
+    resolved_at: Timestamp | null;
+    resolved_by_account_id: number | null;
+    resolution: string | null;
+    note: string | null;
+};
+export type adventure_update = {
+    id: Generated<number>;
+    account_id: number;
+    body: string;
+    created_at: Generated<Timestamp>;
+    deleted_at: Timestamp | null;
+    staff_hidden_at: Timestamp | null;
 };
 export type economy_flow = {
     id: Generated<number>;
@@ -302,8 +345,13 @@ export type DB = {
     account_login: account_login;
     account_look: account_look;
     account_message: account_message;
+    adventure_block: adventure_block;
     adventure_event: adventure_event;
+    adventure_log_profile: adventure_log_profile;
     adventure_outfit: adventure_outfit;
+    adventure_reply: adventure_reply;
+    adventure_report: adventure_report;
+    adventure_update: adventure_update;
     economy_flow: economy_flow;
     economy_snapshot: economy_snapshot;
     friendlist: friendlist;
