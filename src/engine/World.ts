@@ -53,6 +53,7 @@ import { EntityQueueState, PlayerQueueType } from '#/engine/entity/PlayerQueueRe
 import { PlayerStat } from '#/engine/entity/PlayerStat.js';
 import type { InputChunk } from '#/engine/entity/tracking/InputRing.js';
 import type { InputCapture } from '#/engine/entity/tracking/InputTracking.js';
+import type { AdventureBatch } from '#/engine/entity/tracking/AdventureEvent.js';
 import { SessionLog } from '#/engine/entity/tracking/SessionLog.js';
 import { WealthTransactionEvent, WealthEvent } from '#/engine/entity/tracking/WealthEvent.js';
 import GameMap, { changeLocCollision, changeNpcCollision, changeBlockCollision, changePlayerOccCollision } from '#/engine/GameMap.js';
@@ -121,6 +122,9 @@ export type InputCaptureResult = {
 
 type LogoutRequest = {
     save: Uint8Array;
+    // the Adventurer Log lines since the last save; resent with every retry,
+    // which the login server's (session, seq) key makes harmless
+    adventure: AdventureBatch;
     lastAttempt: number;
 };
 
@@ -870,7 +874,8 @@ class World {
                 this.loginThread.postMessage({
                     type: 'player_logout',
                     username,
-                    save: request.save
+                    save: request.save,
+                    adventure: request.adventure
                 });
             }
         }
@@ -1330,7 +1335,10 @@ class World {
             this.loginThread.postMessage({
                 type: 'player_autosave',
                 username: player.username,
-                save: player.save()
+                save: player.save(),
+                // fire-and-forget like the save: lines lost with a lost
+                // autosave are lines the save they belong to lost too
+                adventure: player.takeAdventure()
             });
         }
     }
@@ -2709,6 +2717,7 @@ class World {
 
         this.logoutRequests.set(player.username, {
             save,
+            adventure: player.takeAdventure(),
             lastAttempt: -1
         });
     }

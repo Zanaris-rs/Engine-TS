@@ -1,3 +1,4 @@
+import type { AdventureBatch } from '#/engine/entity/tracking/AdventureEvent.js';
 import InternalClient from '#/server/InternalClient.js';
 import Environment from '#/util/Environment.js';
 
@@ -73,7 +74,7 @@ export class LoginClient extends InternalClient {
     }
 
     // returns true if the login server acknowledged the logout
-    public async playerLogout(username: string, save: Uint8Array) {
+    public async playerLogout(username: string, save: Uint8Array, adventure?: AdventureBatch) {
         await this.connect();
 
         if (!this.ws || !this.wsr || !this.wsr.checkIfWsLive()) {
@@ -86,7 +87,8 @@ export class LoginClient extends InternalClient {
             nodeTime: Date.now(),
             profile: Environment.node.profile,
             username,
-            save: Buffer.from(save).toString('base64')
+            save: Buffer.from(save).toString('base64'),
+            adventure
         });
 
         if (reply.error) {
@@ -97,7 +99,7 @@ export class LoginClient extends InternalClient {
     }
 
     // we don't care about acknowledgement, send the save and continue on
-    public async playerAutosave(username: string, save: Uint8Array) {
+    public async playerAutosave(username: string, save: Uint8Array, adventure?: AdventureBatch) {
         await this.connect();
 
         if (!this.ws || !this.wsr || !this.wsr.checkIfWsLive()) {
@@ -111,7 +113,8 @@ export class LoginClient extends InternalClient {
                 nodeTime: Date.now(),
                 profile: Environment.node.profile,
                 username,
-                save: Buffer.from(save).toString('base64')
+                save: Buffer.from(save).toString('base64'),
+                adventure
             })
         );
     }

@@ -121,10 +121,10 @@ async function handleRequests(parentPort: ParentPort, msg: any) {
             break;
         }
         case 'player_logout': {
-            const { username, save } = msg;
+            const { username, save, adventure } = msg;
 
             if (Environment.login.enabled) {
-                const success = await client.playerLogout(username, save);
+                const success = await client.playerLogout(username, save, adventure);
 
                 parentPort.postMessage({
                     type: 'player_logout',
@@ -148,10 +148,10 @@ async function handleRequests(parentPort: ParentPort, msg: any) {
             break;
         }
         case 'player_autosave': {
-            const { username, save } = msg;
+            const { username, save, adventure } = msg;
 
             if (Environment.login.enabled) {
-                await client.playerAutosave(username, save);
+                await client.playerAutosave(username, save, adventure);
             } else {
                 const profile = Environment.node.profile;
                 if (!fs.existsSync(`data/players/${profile}`)) {
