@@ -360,6 +360,21 @@ CREATE TABLE "account_look" (
     PRIMARY KEY ("account_id", "profile")
 );
 
+-- CreateTable
+CREATE TABLE "adventure_outfit" (
+    "account_id" INTEGER NOT NULL,
+    "slot" INTEGER NOT NULL,
+    "name" TEXT NOT NULL,
+    "gender" INTEGER NOT NULL,
+    "kits" TEXT NOT NULL,
+    "colours" TEXT NOT NULL,
+    "worn" TEXT NOT NULL,
+    "is_default" BOOLEAN NOT NULL DEFAULT false,
+    "updated_at" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    PRIMARY KEY ("account_id", "slot")
+);
+
 -- CreateIndex
 CREATE UNIQUE INDEX "account_username_key" ON "account"("username");
 
