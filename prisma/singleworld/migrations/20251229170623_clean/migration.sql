@@ -375,6 +375,61 @@ CREATE TABLE "adventure_outfit" (
     PRIMARY KEY ("account_id", "slot")
 );
 
+-- CreateTable
+CREATE TABLE "adventure_log_profile" (
+    "account_id" INTEGER NOT NULL PRIMARY KEY,
+    "headline" TEXT NOT NULL DEFAULT '',
+    "about" TEXT NOT NULL DEFAULT '',
+    "custom_css" TEXT NOT NULL DEFAULT '',
+    "css_disabled_at" DATETIME,
+    "hidden_categories" INTEGER NOT NULL DEFAULT 0,
+    "updated_at" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+-- CreateTable
+CREATE TABLE "adventure_update" (
+    "id" INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+    "account_id" INTEGER NOT NULL,
+    "body" TEXT NOT NULL,
+    "created_at" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "deleted_at" DATETIME,
+    "staff_hidden_at" DATETIME
+);
+
+-- CreateTable
+CREATE TABLE "adventure_reply" (
+    "id" INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+    "update_id" INTEGER NOT NULL,
+    "author_account_id" INTEGER NOT NULL,
+    "body" TEXT NOT NULL,
+    "created_at" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "deleted_at" DATETIME,
+    "staff_hidden_at" DATETIME
+);
+
+-- CreateTable
+CREATE TABLE "adventure_block" (
+    "owner_account_id" INTEGER NOT NULL,
+    "blocked_account_id" INTEGER NOT NULL,
+    "created_at" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    PRIMARY KEY ("owner_account_id", "blocked_account_id")
+);
+
+-- CreateTable
+CREATE TABLE "adventure_report" (
+    "id" INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+    "reporter_account_id" INTEGER NOT NULL,
+    "target_kind" TEXT NOT NULL,
+    "target_id" INTEGER NOT NULL,
+    "reason" TEXT NOT NULL,
+    "created_at" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "resolved_at" DATETIME,
+    "resolved_by_account_id" INTEGER,
+    "resolution" TEXT,
+    "note" TEXT
+);
+
 -- CreateIndex
 CREATE UNIQUE INDEX "account_username_key" ON "account"("username");
 
@@ -497,3 +552,18 @@ CREATE UNIQUE INDEX "adventure_event_session_uuid_seq_key" ON "adventure_event"(
 
 -- CreateIndex
 CREATE INDEX "adventure_event_account_id_profile_occurred_at_idx" ON "adventure_event"("account_id", "profile", "occurred_at" DESC);
+
+-- CreateIndex
+CREATE INDEX "adventure_update_account_id_created_at_idx" ON "adventure_update"("account_id", "created_at" DESC);
+
+-- CreateIndex
+CREATE INDEX "adventure_reply_update_id_created_at_idx" ON "adventure_reply"("update_id", "created_at");
+
+-- CreateIndex
+CREATE INDEX "adventure_reply_author_account_id_created_at_idx" ON "adventure_reply"("author_account_id", "created_at");
+
+-- CreateIndex
+CREATE INDEX "adventure_report_reporter_account_id_created_at_idx" ON "adventure_report"("reporter_account_id", "created_at");
+
+-- CreateIndex
+CREATE INDEX "adventure_report_resolved_at_created_at_idx" ON "adventure_report"("resolved_at", "created_at");

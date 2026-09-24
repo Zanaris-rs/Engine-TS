@@ -576,3 +576,81 @@ model adventure_outfit {
 
     @@id([account_id, slot])
 }
+
+// The Adventurer Log (013_adventurer_log): a player's public page. The
+// owner's headline, about, CSS (stored as written, sanitised by the website
+// every time it is drawn) and the bitmask of adventure categories hidden.
+model adventure_log_profile {
+    account_id Int @id
+
+    headline          String    @default("")
+    about             String    @default("")
+    custom_css        String    @default("")
+    css_disabled_at   DateTime?
+    hidden_categories Int       @default(0)
+
+    updated_at DateTime @default(now())
+}
+
+// An update the owner posted on their log. Deleted and staff-hidden rows are
+// kept, for reports.
+model adventure_update {
+    id Int @id @default(autoincrement())
+
+    account_id Int
+    body       String
+
+    created_at      DateTime  @default(now())
+    deleted_at      DateTime?
+    staff_hidden_at DateTime?
+
+    @@index([account_id, created_at(sort: Desc)])
+}
+
+// A reply under an update, by any player the owner has not blocked.
+model adventure_reply {
+    id Int @id @default(autoincrement())
+
+    update_id         Int
+    author_account_id Int
+    body              String
+
+    created_at      DateTime  @default(now())
+    deleted_at      DateTime?
+    staff_hidden_at DateTime?
+
+    @@index([update_id, created_at])
+    @@index([author_account_id, created_at])
+}
+
+// Players an owner has blocked from replying on their log.
+model adventure_block {
+    owner_account_id   Int
+    blocked_account_id Int
+
+    created_at DateTime @default(now())
+
+    @@id([owner_account_id, blocked_account_id])
+}
+
+// A report of an update, a reply or a whole log, for staff. One open report
+// per reporter per target is a partial unique index, in postgres only.
+// target_kind: 'update' | 'reply' | 'log'; resolution: 'hidden' |
+// 'css_disabled' | 'dismissed'.
+model adventure_report {
+    id Int @id @default(autoincrement())
+
+    reporter_account_id Int
+    target_kind         String
+    target_id           Int
+    reason              String
+
+    created_at             DateTime  @default(now())
+    resolved_at            DateTime?
+    resolved_by_account_id Int?
+    resolution             String?
+    note                   String?
+
+    @@index([reporter_account_id, created_at])
+    @@index([resolved_at, created_at])
+}
