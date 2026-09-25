@@ -11,6 +11,7 @@ import { PlayerLoading } from '#/engine/entity/PlayerLoading.js';
 import Packet from '#/io/Packet.js';
 import { INTERNAL_MAX_PAYLOAD } from '#/server/InternalClient.js';
 import { lookOf, recordAdventure } from '#/server/login/Adventure.js';
+import { postReport, reportWebhookUrl } from '#/server/login/DiscordReports.js';
 import { updateHiscores } from '#/server/login/Hiscores.js';
 import { handleWithFailureReply, retryReply, type ReplyId, type SendReply } from '#/server/login/LoginMessage.js';
 import {
@@ -31,6 +32,15 @@ import { toSafeName } from '#/util/JString.js';
 import { printInfo } from '#/util/Logger.js';
 import { startManagementWeb } from '#/web.js';
 import InvType from '#/cache/config/InvType.js';
+
+/**
+ * Where Report Abuse is announced, read once at startup. Null - the usual case
+ * on a developer's machine - means reports are written and nobody is pinged.
+ * The inbox link is optional and not a secret; it rides in the same env file
+ * because that is the one file the login unit reads.
+ */
+const REPORT_WEBHOOK_URL = reportWebhookUrl();
+const REPORT_INBOX_URL = process.env.DISCORD_REPORT_INBOX_URL?.trim() || undefined;
 
 /** The look a loaded save holds, for `account_look`. */
 function lookOfPlayer(player: Player) {
@@ -181,6 +191,25 @@ const OFFENDER_SESSION_WINDOW_MS = 24 * 60 * 60 * 1000;
  * whatever the world managed to resolve - null included. The row still names
  * the offender.
  */
+/**
+ * The reporter's name for the Discord embed. The world sends only the account
+ * id, and a failed lookup is worth "unknown" in a notification, not a report
+ * that never reached the channel.
+ */
+async function reporterName(accountId: number | null): Promise<string | null> {
+    if (accountId === null) {
+        return null;
+    }
+
+    try {
+        const account = await db.selectFrom('account').select('username').where('id', '=', accountId).executeTakeFirst();
+        return account?.username ?? null;
+    } catch (err) {
+        console.error('reporter lookup failed for account_id %s', accountId, err);
+        return null;
+    }
+}
+
 async function resolveOffender(profile: string, offender: string, reportedAt: Date, accountId: number | null, sessionUuid: string | null): Promise<{ accountId: number | null; sessionUuid: string | null }> {
     if (accountId !== null && sessionUuid !== null) {
         return { accountId, sessionUuid };
@@ -681,6 +710,30 @@ export default class LoginServer {
                                 offender_coord: typeof offender_coord === 'number' ? offender_coord : null
                             })
                             .execute();
+
+                        // Only once the row exists: Discord is the ping, the
+                        // table is the record. Not awaited - the socket handler
+                        // is back to its next message while Discord answers.
+                        if (REPORT_WEBHOOK_URL !== null) {
+                            const reporterAccountId = typeof account_id === 'number' && account_id > 0 ? account_id : null;
+
+                            void reporterName(reporterAccountId).then(reporter =>
+                                postReport(
+                                    REPORT_WEBHOOK_URL,
+                                    {
+                                        reporter,
+                                        offender: String(offender),
+                                        reason: Number(reason),
+                                        world: typeof nodeId === 'number' ? nodeId : null,
+                                        coord: Number(coord),
+                                        offenderCoord: typeof offender_coord === 'number' ? offender_coord : null,
+                                        reportedAt,
+                                        uuid: typeof uuid === 'string' ? uuid : null
+                                    },
+                                    REPORT_INBOX_URL
+                                )
+                            );
+                        }
                     } else if (type === 'player_spawn') {
                         // Every item-creating cheat on a production world, so
                         // the economy page can account for what a moderator
