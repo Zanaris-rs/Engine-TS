@@ -12,6 +12,8 @@ import BigInteger = forge.jsbn.BigInteger;
 
 export default class Packet extends DoublyLinkable {
     private static readonly CRC32_POLYNOMIAL: number = 0xedb88320;
+    // V8's ConsString::kMinLength - below this, `+=` produces a flat string.
+    private static readonly FLAT_STRING_MAX: number = 13;
 
     private static readonly crctable: Int32Array = new Int32Array(256);
     static readonly bitmask: Uint32Array = new Uint32Array(33);
@@ -229,17 +231,13 @@ export default class Packet extends DoublyLinkable {
 
     g3(): number {
         this.pos += 3;
-        return (this.data[this.pos - 3] << 16) +
-            (this.data[this.pos - 2] << 8) +
-            this.data[this.pos - 1];
+        return (this.data[this.pos - 3] << 16) + (this.data[this.pos - 2] << 8) + this.data[this.pos - 1];
     }
 
     g3s() {
         this.pos += 3;
-        const v = (this.data[this.pos - 3] << 16) +
-            (this.data[this.pos - 2] << 8) +
-            this.data[this.pos - 1];
-        return v > 0xFFFFFF ? v - 0x1000000 : v;
+        const v = (this.data[this.pos - 3] << 16) + (this.data[this.pos - 2] << 8) + this.data[this.pos - 1];
+        return v > 0xffffff ? v - 0x1000000 : v;
     }
 
     g4(): number {
@@ -265,14 +263,56 @@ export default class Packet extends DoublyLinkable {
     }
 
     gjstr(terminator: number = 10): string {
-        const view: DataView = this.view;
-        const length: number = view.byteLength;
-        let str: string = '';
-        let b: number;
-        while ((b = view.getUint8(this.pos++)) !== terminator && this.pos < length) {
-            str += String.fromCharCode(b);
+        const data: Uint8Array = this.data;
+        const length: number = data.length;
+        const start: number = this.pos;
+
+        if (start >= length) {
+            // the old per-character loop called getUint8() before testing anything,
+            // so an out-of-range read threw here. Keep throwing the same RangeError.
+            this.view.getUint8(start);
         }
-        return str;
+
+        let end: number = start;
+        while (end < length && data[end] !== terminator) {
+            end++;
+        }
+
+        if (end < length) {
+            // terminator found: consume it, exclude it from the string
+            this.pos = end + 1;
+        } else {
+            // no terminator before end-of-buffer. The old loop read the final byte,
+            // failed its `this.pos < length` guard and returned *without* appending
+            // it, so the last byte is deliberately dropped.
+            this.pos = length;
+            end = length - 1;
+        }
+
+        const size: number = end - start;
+        if (size <= 0) {
+            return '';
+        }
+
+        if (size < Packet.FLAT_STRING_MAX) {
+            // V8 only builds a ConsString at >= 13 characters, so short concatenation
+            // stays flat - and beats the Buffer wrapper's fixed cost at this size.
+            let str: string = '';
+            for (let i: number = start; i < end; i++) {
+                str += String.fromCharCode(data[i]);
+            }
+            return str;
+        }
+
+        // One-shot decode into a flat string. Building this per-character instead
+        // costs ~24 bytes of ConsString per character rather than ~1.
+        //
+        // This MUST stay Buffer's 'latin1' (byte === code point, matching
+        // String.fromCharCode and pjstr's charCodeAt). TextDecoder('latin1') is NOT
+        // latin1: the Encoding spec aliases that label to windows-1252, which remaps
+        // 0x80-0x9f (0x80 -> U+20AC), silently corrupting strings and breaking the
+        // gjstr/pjstr round-trip.
+        return Buffer.from(data.buffer, data.byteOffset + start, size).toString('latin1');
     }
 
     gsmart(): number {
@@ -293,7 +333,7 @@ export default class Packet extends DoublyLinkable {
         let result = 0;
 
         while ((byte & 0x80) !== 0) {
-            result = (result | (byte & 0x7F)) << 7;
+            result = (result | (byte & 0x7f)) << 7;
             byte = this.view.getUint8(this.pos++);
         }
 
@@ -386,10 +426,10 @@ export default class Packet extends DoublyLinkable {
     }
 
     pVarInt(value: number) {
-        if ((value & 0xFFFFFF80) != 0) {
-            if ((value & 0xFFFFC000) != 0) {
-                if ((value & 0xFFE00000) != 0) {
-                    if ((value & 0xF0000000) != 0) {
+        if ((value & 0xffffff80) != 0) {
+            if ((value & 0xffffc000) != 0) {
+                if ((value & 0xffe00000) != 0) {
+                    if ((value & 0xf0000000) != 0) {
                         this.view.setUint8(this.pos++, (value >>> 28) | 0x80);
                     }
 
@@ -402,7 +442,7 @@ export default class Packet extends DoublyLinkable {
             this.view.setUint8(this.pos++, (value >>> 7) | 0x80);
         }
 
-        this.view.setUint8(this.pos++, value & 0x7F);
+        this.view.setUint8(this.pos++, value & 0x7f);
     }
 
     bitStart(): void {

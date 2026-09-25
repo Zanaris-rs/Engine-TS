@@ -8,12 +8,34 @@ CREATE TABLE "account" (
     "id" INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
     "username" TEXT NOT NULL,
     "password" TEXT NOT NULL,
+    "email" TEXT NOT NULL,
+    "email_normalized" TEXT NOT NULL,
     "registration_ip" TEXT,
+    "registration_group" TEXT,
     "registration_date" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "signup_agent_hash" TEXT,
     "muted_until" DATETIME,
     "banned_until" DATETIME,
+    "playable_after" DATETIME,
     "staffmodlevel" INTEGER NOT NULL DEFAULT 0,
-    "members" BOOLEAN NOT NULL DEFAULT false
+    "members" BOOLEAN NOT NULL DEFAULT false,
+    "invites_enabled" BOOLEAN NOT NULL DEFAULT false
+);
+
+-- CreateTable
+CREATE TABLE "signup_attempt" (
+    "id" INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+    "ip" TEXT NOT NULL,
+    "ip_group" TEXT NOT NULL,
+    "created_at" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+-- CreateTable
+CREATE TABLE "login_attempt" (
+    "id" INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+    "username" TEXT NOT NULL,
+    "ip" TEXT NOT NULL,
+    "created_at" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
 -- CreateTable
@@ -134,7 +156,17 @@ CREATE TABLE "report" (
     "timestamp" DATETIME NOT NULL,
     "coord" INTEGER NOT NULL,
     "offender" TEXT NOT NULL,
-    "reason" INTEGER NOT NULL
+    "reason" INTEGER NOT NULL,
+    "reporter_account_id" INTEGER,
+    "world" INTEGER,
+    "uuid" TEXT,
+    "offender_account_id" INTEGER,
+    "offender_session_uuid" TEXT,
+    "offender_coord" INTEGER,
+    "resolved_at" DATETIME,
+    "resolution" TEXT,
+    "resolved_by_account_id" INTEGER,
+    "staff_note" TEXT
 );
 
 -- CreateTable
@@ -145,5 +177,407 @@ CREATE TABLE "input_report" (
     "data" BLOB NOT NULL
 );
 
+-- CreateTable
+CREATE TABLE "account_message" (
+    "id" INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+    "account_id" INTEGER NOT NULL,
+    "ticket_id" INTEGER,
+    "kind" TEXT NOT NULL,
+    "subject" TEXT NOT NULL,
+    "body" TEXT NOT NULL,
+    "created_by_account_id" INTEGER,
+    "created_at" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "read_at" DATETIME
+);
+
+-- CreateTable
+CREATE TABLE "ticket" (
+    "id" INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+    "account_id" INTEGER NOT NULL,
+    "kind" TEXT NOT NULL,
+    "subject" TEXT NOT NULL,
+    "status" TEXT NOT NULL DEFAULT 'open',
+    "created_at" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updated_at" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+-- CreateTable
+CREATE TABLE "ticket_message" (
+    "id" INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+    "ticket_id" INTEGER NOT NULL,
+    "author_account_id" INTEGER NOT NULL,
+    "from_staff" BOOLEAN NOT NULL DEFAULT false,
+    "body" TEXT NOT NULL,
+    "created_at" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+-- CreateTable
+CREATE TABLE "staff_action" (
+    "id" INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+    "actor_account_id" INTEGER NOT NULL,
+    "action" TEXT NOT NULL,
+    "target" TEXT NOT NULL,
+    "created_at" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+-- CreateTable
+CREATE TABLE "report_input" (
+    "id" INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+    "report_uuid" TEXT NOT NULL,
+    "seq" INTEGER NOT NULL,
+    "kind" TEXT NOT NULL,
+    "client" TEXT NOT NULL,
+    "started_at" DATETIME NOT NULL,
+    "flushed_at" DATETIME NOT NULL,
+    "data" BLOB NOT NULL
+);
+
+-- CreateTable
+CREATE TABLE "report_chat" (
+    "id" INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+    "report_uuid" TEXT NOT NULL,
+    "at" DATETIME NOT NULL,
+    "kind" TEXT NOT NULL,
+    "to_username" TEXT,
+    "coord" INTEGER NOT NULL,
+    "message" TEXT NOT NULL
+);
+
+-- CreateTable
+CREATE TABLE "punishment" (
+    "id" INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+    "account_id" INTEGER NOT NULL,
+    "username" TEXT NOT NULL,
+    "kind" TEXT NOT NULL,
+    "issued_at" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "until" DATETIME,
+    "automated" BOOLEAN NOT NULL DEFAULT false,
+    "issued_by_account_id" INTEGER,
+    "note" TEXT,
+    "lifted_at" DATETIME,
+    "lifted_by_account_id" INTEGER
+);
+
+-- CreateTable
+CREATE TABLE "staff_spawn" (
+    "id" INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+    "staff_account_id" INTEGER NOT NULL,
+    "target_account_id" INTEGER,
+    "item_id" INTEGER NOT NULL,
+    "count" INTEGER NOT NULL,
+    "world" INTEGER NOT NULL,
+    "created_at" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+-- CreateTable
+CREATE TABLE "economy_snapshot" (
+    "id" INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+    "taken_at" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "profile" TEXT NOT NULL,
+    "players" INTEGER NOT NULL,
+    "coins" BIGINT NOT NULL,
+    "items" TEXT NOT NULL,
+    "tracked" TEXT NOT NULL
+);
+
+-- CreateTable
+CREATE TABLE "economy_flow" (
+    "id" INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+    "taken_at" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "profile" TEXT NOT NULL,
+    "item_id" INTEGER NOT NULL,
+    "delta" INTEGER NOT NULL
+);
+
+-- CreateTable
+CREATE TABLE "invite" (
+    "id" INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+    "code" TEXT NOT NULL,
+    "created_by_account_id" INTEGER NOT NULL,
+    "created_at" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "expires_at" DATETIME NOT NULL,
+    "claimed_by_account_id" INTEGER,
+    "claimed_at" DATETIME,
+    "revoked_at" DATETIME,
+    "revoked_reason" TEXT
+);
+
+-- CreateTable
+CREATE TABLE "invite_attempt" (
+    "id" INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+    "ip" TEXT NOT NULL,
+    "created_at" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+-- CreateTable
+CREATE TABLE "record_attempt" (
+    "id" INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+    "account_id" INTEGER NOT NULL,
+    "profile" TEXT NOT NULL,
+    "duration_seconds" INTEGER NOT NULL,
+    "state" TEXT NOT NULL DEFAULT 'running',
+    "reason" TEXT,
+    "initial_logout_at" DATETIME NOT NULL,
+    "started_at" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "final_logout_at" DATETIME,
+    "stopped_at" DATETIME,
+    "elapsed_ms" BIGINT
+);
+
+-- CreateTable
+CREATE TABLE "record_attempt_skill" (
+    "attempt_id" INTEGER NOT NULL,
+    "category" INTEGER NOT NULL,
+    "start_xp" BIGINT NOT NULL,
+    "end_xp" BIGINT,
+    "gained" BIGINT,
+
+    PRIMARY KEY ("attempt_id", "category")
+);
+
+-- CreateTable
+CREATE TABLE "adventure_event" (
+    "id" INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+    "account_id" INTEGER NOT NULL,
+    "profile" TEXT NOT NULL,
+    "session_uuid" TEXT NOT NULL,
+    "seq" INTEGER NOT NULL,
+    "occurred_at" DATETIME NOT NULL,
+    "category" INTEGER NOT NULL,
+    "event" TEXT NOT NULL
+);
+
+-- CreateTable
+CREATE TABLE "account_look" (
+    "account_id" INTEGER NOT NULL,
+    "profile" TEXT NOT NULL,
+    "gender" INTEGER NOT NULL,
+    "kits" TEXT NOT NULL,
+    "colours" TEXT NOT NULL,
+    "worn" TEXT NOT NULL,
+    "updated_at" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    PRIMARY KEY ("account_id", "profile")
+);
+
+-- CreateTable
+CREATE TABLE "adventure_outfit" (
+    "account_id" INTEGER NOT NULL,
+    "slot" INTEGER NOT NULL,
+    "name" TEXT NOT NULL,
+    "gender" INTEGER NOT NULL,
+    "kits" TEXT NOT NULL,
+    "colours" TEXT NOT NULL,
+    "worn" TEXT NOT NULL,
+    "is_default" BOOLEAN NOT NULL DEFAULT false,
+    "updated_at" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    PRIMARY KEY ("account_id", "slot")
+);
+
+-- CreateTable
+CREATE TABLE "adventure_log_profile" (
+    "account_id" INTEGER NOT NULL PRIMARY KEY,
+    "headline" TEXT NOT NULL DEFAULT '',
+    "about" TEXT NOT NULL DEFAULT '',
+    "custom_css" TEXT NOT NULL DEFAULT '',
+    "css_disabled_at" DATETIME,
+    "hidden_categories" INTEGER NOT NULL DEFAULT 0,
+    "pinned_update_id" INTEGER,
+    "updated_at" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+-- CreateTable
+CREATE TABLE "adventure_update" (
+    "id" INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+    "account_id" INTEGER NOT NULL,
+    "body" TEXT NOT NULL,
+    "created_at" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "deleted_at" DATETIME,
+    "staff_hidden_at" DATETIME,
+    "edited_at" DATETIME
+);
+
+-- CreateTable
+CREATE TABLE "adventure_reply" (
+    "id" INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+    "update_id" INTEGER NOT NULL,
+    "author_account_id" INTEGER NOT NULL,
+    "body" TEXT NOT NULL,
+    "created_at" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "deleted_at" DATETIME,
+    "staff_hidden_at" DATETIME
+);
+
+-- CreateTable
+CREATE TABLE "adventure_block" (
+    "owner_account_id" INTEGER NOT NULL,
+    "blocked_account_id" INTEGER NOT NULL,
+    "created_at" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    PRIMARY KEY ("owner_account_id", "blocked_account_id")
+);
+
+-- CreateTable
+CREATE TABLE "adventure_gz" (
+    "event_id" INTEGER NOT NULL,
+    "account_id" INTEGER NOT NULL,
+    "created_at" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    PRIMARY KEY ("event_id", "account_id")
+);
+
+-- CreateTable
+CREATE TABLE "adventure_report" (
+    "id" INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+    "reporter_account_id" INTEGER NOT NULL,
+    "target_kind" TEXT NOT NULL,
+    "target_id" INTEGER NOT NULL,
+    "reason" TEXT NOT NULL,
+    "created_at" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "resolved_at" DATETIME,
+    "resolved_by_account_id" INTEGER,
+    "resolution" TEXT,
+    "note" TEXT
+);
+
 -- CreateIndex
 CREATE UNIQUE INDEX "account_username_key" ON "account"("username");
+
+-- CreateIndex
+CREATE INDEX "account_email_normalized_idx" ON "account"("email_normalized");
+
+-- CreateIndex
+CREATE INDEX "account_registration_ip_idx" ON "account"("registration_ip");
+
+-- CreateIndex
+CREATE INDEX "account_registration_group_idx" ON "account"("registration_group");
+
+-- CreateIndex
+CREATE INDEX "signup_attempt_ip_created_at_idx" ON "signup_attempt"("ip", "created_at");
+
+-- CreateIndex
+CREATE INDEX "signup_attempt_ip_group_created_at_idx" ON "signup_attempt"("ip_group", "created_at");
+
+-- CreateIndex
+CREATE INDEX "login_attempt_username_created_at_idx" ON "login_attempt"("username", "created_at");
+
+-- CreateIndex
+CREATE INDEX "login_attempt_ip_created_at_idx" ON "login_attempt"("ip", "created_at");
+
+-- CreateIndex
+CREATE INDEX "session_profile_account_id_timestamp_idx" ON "session"("profile", "account_id", "timestamp" DESC);
+
+-- CreateIndex
+CREATE INDEX "session_wealth_timestamp_idx" ON "session_wealth"("timestamp");
+
+-- CreateIndex
+CREATE INDEX "session_wealth_session_uuid_timestamp_idx" ON "session_wealth"("session_uuid", "timestamp");
+
+-- CreateIndex
+CREATE INDEX "public_chat_timestamp_idx" ON "public_chat"("timestamp");
+
+-- CreateIndex
+CREATE INDEX "public_chat_session_uuid_timestamp_idx" ON "public_chat"("session_uuid", "timestamp");
+
+-- CreateIndex
+CREATE INDEX "private_chat_timestamp_idx" ON "private_chat"("timestamp");
+
+-- CreateIndex
+CREATE INDEX "private_chat_account_id_timestamp_idx" ON "private_chat"("account_id", "timestamp");
+
+-- CreateIndex
+CREATE INDEX "report_timestamp_idx" ON "report"("timestamp" DESC);
+
+-- CreateIndex
+CREATE INDEX "report_uuid_idx" ON "report"("uuid");
+
+-- CreateIndex
+CREATE INDEX "report_offender_account_id_timestamp_idx" ON "report"("offender_account_id", "timestamp" DESC);
+
+-- CreateIndex
+CREATE INDEX "account_message_account_id_read_at_idx" ON "account_message"("account_id", "read_at");
+
+-- CreateIndex
+CREATE INDEX "account_message_account_id_created_at_idx" ON "account_message"("account_id", "created_at" DESC);
+
+-- CreateIndex
+CREATE INDEX "ticket_account_id_updated_at_idx" ON "ticket"("account_id", "updated_at" DESC);
+
+-- CreateIndex
+CREATE INDEX "ticket_status_updated_at_idx" ON "ticket"("status", "updated_at" DESC);
+
+-- CreateIndex
+CREATE INDEX "ticket_message_ticket_id_created_at_idx" ON "ticket_message"("ticket_id", "created_at");
+
+-- CreateIndex
+CREATE INDEX "ticket_message_author_account_id_created_at_idx" ON "ticket_message"("author_account_id", "created_at");
+
+-- CreateIndex
+CREATE INDEX "staff_action_actor_account_id_action_created_at_idx" ON "staff_action"("actor_account_id", "action", "created_at");
+
+-- CreateIndex
+CREATE INDEX "report_input_report_uuid_seq_idx" ON "report_input"("report_uuid", "seq");
+
+-- CreateIndex
+CREATE INDEX "report_chat_report_uuid_at_idx" ON "report_chat"("report_uuid", "at");
+
+-- CreateIndex
+CREATE INDEX "punishment_issued_at_idx" ON "punishment"("issued_at" DESC);
+
+-- CreateIndex
+CREATE INDEX "punishment_account_id_idx" ON "punishment"("account_id");
+
+-- CreateIndex
+CREATE INDEX "staff_spawn_created_at_idx" ON "staff_spawn"("created_at" DESC);
+
+-- CreateIndex
+CREATE INDEX "economy_snapshot_profile_taken_at_idx" ON "economy_snapshot"("profile", "taken_at" DESC);
+
+-- CreateIndex
+CREATE INDEX "economy_flow_profile_taken_at_idx" ON "economy_flow"("profile", "taken_at" DESC);
+
+-- CreateIndex
+CREATE UNIQUE INDEX "invite_code_key" ON "invite"("code");
+
+-- CreateIndex
+CREATE INDEX "invite_created_by_account_id_created_at_idx" ON "invite"("created_by_account_id", "created_at" DESC);
+
+-- CreateIndex
+CREATE INDEX "invite_claimed_by_account_id_idx" ON "invite"("claimed_by_account_id");
+
+-- CreateIndex
+CREATE INDEX "invite_attempt_ip_created_at_idx" ON "invite_attempt"("ip", "created_at");
+
+-- CreateIndex
+CREATE INDEX "record_attempt_account_id_started_at_idx" ON "record_attempt"("account_id", "started_at" DESC);
+
+-- CreateIndex
+CREATE INDEX "record_attempt_profile_duration_seconds_state_idx" ON "record_attempt"("profile", "duration_seconds", "state");
+
+-- CreateIndex
+CREATE INDEX "record_attempt_skill_category_gained_idx" ON "record_attempt_skill"("category", "gained" DESC);
+
+-- CreateIndex
+CREATE UNIQUE INDEX "adventure_event_session_uuid_seq_key" ON "adventure_event"("session_uuid", "seq");
+
+-- CreateIndex
+CREATE INDEX "adventure_event_account_id_profile_occurred_at_idx" ON "adventure_event"("account_id", "profile", "occurred_at" DESC);
+
+-- CreateIndex
+CREATE INDEX "adventure_update_account_id_created_at_idx" ON "adventure_update"("account_id", "created_at" DESC);
+
+-- CreateIndex
+CREATE INDEX "adventure_reply_update_id_created_at_idx" ON "adventure_reply"("update_id", "created_at");
+
+-- CreateIndex
+CREATE INDEX "adventure_reply_author_account_id_created_at_idx" ON "adventure_reply"("author_account_id", "created_at");
+
+-- CreateIndex
+CREATE INDEX "adventure_report_reporter_account_id_created_at_idx" ON "adventure_report"("reporter_account_id", "created_at");
+
+-- CreateIndex
+CREATE INDEX "adventure_report_resolved_at_created_at_idx" ON "adventure_report"("resolved_at", "created_at");
+
+-- CreateIndex
+CREATE INDEX "adventure_gz_account_id_created_at_idx" ON "adventure_gz"("account_id", "created_at");

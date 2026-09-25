@@ -1,0 +1,692 @@
+// The postgres schema is the source of truth for src/db/types.ts.
+//
+// prisma-kysely runs from here only (the singleworld/multiworld schemas used to
+// carry their own copy of the generator and both wrote the same file, so the
+// generated types depended on whichever migration ran last). Postgres is the
+// richest of the three backends - real booleans, real timestamps, bigint - so
+// generating from it keeps the shared types honest about intent. On sqlite the
+// runtime values are still 0/1 and 'YYYY-MM-DD HH:MM:SS' strings; see the note
+// in src/db/query.ts.
+
+generator kysely {
+    provider = "prisma-kysely"
+
+    output       = "../../src/db"
+    fileName     = "types.ts"
+    enumFileName = "enums.ts"
+
+    // hiscore_large.value is an XP total (max ~2e9 with the x10 scale), which
+    // fits a double comfortably; a bigint here would infect every caller.
+    bigIntTypeOverride = "number"
+}
+
+datasource db {
+    provider = "postgresql"
+    url      = env("DATABASE_URL")
+}
+
+model ipban {
+    ip String @id
+}
+
+model account {
+    id Int @id @default(autoincrement())
+
+    username String @unique
+    password String
+
+    email            String
+    email_normalized String
+
+    registration_ip    String?
+    registration_group String?
+    registration_date  DateTime @default(now()) @db.Timestamptz(3)
+    signup_agent_hash  String?
+
+    muted_until    DateTime? @db.Timestamptz(3)
+    banned_until   DateTime? @db.Timestamptz(3)
+    playable_after DateTime? @db.Timestamptz(3)
+
+    staffmodlevel Int     @default(0)
+    members       Boolean @default(false)
+
+    // off until staff switch it on; see migrations/006_invites
+    invites_enabled Boolean @default(false)
+
+    @@index([email_normalized])
+    @@index([registration_ip])
+    @@index([registration_group])
+}
+
+model signup_attempt {
+    id         Int      @id @default(autoincrement())
+    ip         String
+    ip_group   String
+    created_at DateTime @default(now()) @db.Timestamptz(3)
+
+    @@index([ip, created_at])
+    @@index([ip_group, created_at])
+}
+
+model login_attempt {
+    id         Int      @id @default(autoincrement())
+    username   String
+    ip         String
+    created_at DateTime @default(now()) @db.Timestamptz(3)
+
+    @@index([username, created_at])
+    @@index([ip, created_at])
+}
+
+model account_login {
+    account_id Int
+    profile    String
+
+    logged_in  Int       @default(0)
+    login_time DateTime? @db.Timestamptz(3)
+
+    logged_out  Int       @default(0)
+    logout_time DateTime? @db.Timestamptz(3)
+
+    @@id([profile, account_id])
+}
+
+model hiscore {
+    account_id Int
+    profile    String @default("main")
+    type       Int
+
+    level Int
+    value Int
+    date  DateTime @default(now()) @updatedAt @db.Timestamptz(3)
+
+    @@id([profile, type, account_id])
+    @@index([profile, type, value(sort: Desc)])
+}
+
+model hiscore_large {
+    account_id Int
+    profile    String @default("main")
+    type       Int
+
+    level Int
+    value BigInt
+    date  DateTime @default(now()) @updatedAt @db.Timestamptz(3)
+
+    @@id([profile, type, account_id])
+    @@index([profile, type, value(sort: Desc)])
+}
+
+model friendlist {
+    account_id        Int
+    friend_account_id Int
+    profile           String @default("main")
+
+    created DateTime @default(now()) @db.Timestamptz(3)
+
+    @@id([profile, account_id, friend_account_id])
+}
+
+model ignorelist {
+    account_id Int
+    value      String
+    profile    String @default("main")
+
+    created DateTime @default(now()) @db.Timestamptz(3)
+
+    @@id([profile, account_id, value])
+}
+
+model session {
+    uuid String @id
+
+    account_id Int
+    profile    String
+    world      Int
+    timestamp  DateTime @db.Timestamptz(3)
+
+    uid Int
+    ip  String?
+
+    @@index([profile, account_id, timestamp(sort: Desc)])
+}
+
+model session_log {
+    id Int @id @default(autoincrement())
+
+    session_uuid String
+    timestamp    DateTime @db.Timestamptz(3)
+
+    coord      Int
+    event      String
+    event_type Int    @default(-1)
+}
+
+model session_wealth {
+    id Int @id @default(autoincrement())
+
+    session_uuid String
+    timestamp    DateTime @db.Timestamptz(3)
+
+    coord      Int
+    event_type Int @default(-1)
+
+    account_items String
+    account_value Int
+
+    recipient_session String?
+    recipient_items   String?
+    recipient_value   Int?
+
+    // the bare timestamp is the 7-day retention sweep; the compound one is how
+    // the report evidence functions find one session's rows in a window.
+    @@index([timestamp])
+    @@index([session_uuid, timestamp])
+}
+
+model public_chat {
+    id Int @id @default(autoincrement())
+
+    session_uuid String
+    timestamp    DateTime @db.Timestamptz(3)
+
+    coord   Int
+    message String
+
+    // the hourly retention sweep, then the evidence copy by session.
+    @@index([timestamp])
+    @@index([session_uuid, timestamp])
+}
+
+model private_chat {
+    id Int @id @default(autoincrement())
+
+    account_id Int
+    profile    String
+
+    timestamp     DateTime @db.Timestamptz(3)
+    coord         Int
+    to_account_id Int
+    message       String
+
+    // the hourly retention sweep, then the evidence copy by sender.
+    @@index([timestamp])
+    @@index([account_id, timestamp])
+}
+
+model report {
+    id Int @id @default(autoincrement())
+
+    session_uuid String
+    timestamp    DateTime @db.Timestamptz(3)
+
+    coord    Int
+    offender String
+    reason   Int
+
+    // who pressed Report Abuse, and on which world. Null on the rows written
+    // before the login server took the packet over from the (disabled) logger.
+    reporter_account_id Int?
+    world               Int?
+
+    // The world generates `uuid` and sends it to both the login server (this
+    // row) and the logger server (report_input / report_chat), so the two hub
+    // processes need no ordering. Null on every row older than migration 4,
+    // and its index is deliberately not unique: several reports against the
+    // same offender inside one capture window share a uuid.
+    uuid                  String?
+    offender_account_id   Int?
+    offender_session_uuid String?
+    offender_coord        Int?
+
+    // resolution is actioned | dismissed | watch, null while it is open.
+    resolved_at            DateTime? @db.Timestamptz(3)
+    resolution             String?
+    resolved_by_account_id Int?
+    staff_note             String?
+
+    @@index([timestamp(sort: Desc)])
+    @@index([uuid])
+    @@index([offender_account_id, timestamp(sort: Desc)])
+}
+
+model input_report {
+    id Int @id @default(autoincrement())
+
+    session_uuid String
+    timestamp    DateTime @db.Timestamptz(3)
+
+    data Bytes
+}
+
+// ---------------------------------------------------------------------------
+// the message centre
+// ---------------------------------------------------------------------------
+//
+// One unread rule everywhere, and it is a cross-repo contract pinned in
+// test/fixtures/message-centre-contract.json:
+//
+//     count(*) from account_message where account_id = $1 and read_at is null
+//
+// which is both the number the login server puts on the client's welcome
+// screen and the number the website's Message Centre shows. No foreign keys,
+// like every other table here; the SQL API in
+// prisma/postgres/migrations/003_message_centre owns the rules the website is
+// allowed to rely on.
+
+model account_message {
+    id Int @id @default(autoincrement())
+
+    // ticket_id is null for a standalone notice and set when a staff reply
+    // lands on a ticket; kind is welcome | notice | ban | mute | reply;
+    // created_by_account_id is null when the system wrote the row rather than
+    // a person.
+    account_id            Int
+    ticket_id             Int?
+    kind                  String
+    subject               String
+    body                  String
+    created_by_account_id Int?
+
+    created_at DateTime  @default(now()) @db.Timestamptz(3)
+    read_at    DateTime? @db.Timestamptz(3)
+
+    @@index([account_id, read_at])
+    @@index([account_id, created_at(sort: Desc)])
+}
+
+model ticket {
+    id Int @id @default(autoincrement())
+
+    // kind is bug | appeal | other, status is open | closed
+    account_id Int
+    kind       String
+    subject    String
+    status     String @default("open")
+
+    created_at DateTime @default(now()) @db.Timestamptz(3)
+    updated_at DateTime @default(now()) @db.Timestamptz(3)
+
+    @@index([account_id, updated_at(sort: Desc)])
+    @@index([status, updated_at(sort: Desc)])
+}
+
+model ticket_message {
+    id Int @id @default(autoincrement())
+
+    ticket_id         Int
+    author_account_id Int
+    from_staff        Boolean @default(false)
+    body              String
+
+    created_at DateTime @default(now()) @db.Timestamptz(3)
+
+    @@index([ticket_id, created_at])
+    @@index([author_account_id, created_at])
+}
+
+model staff_action {
+    id Int @id @default(autoincrement())
+
+    // action names the staff function that ran, target what it acted on
+    actor_account_id Int
+    action           String
+    target           String
+
+    created_at DateTime @default(now()) @db.Timestamptz(3)
+
+    @@index([actor_account_id, action, created_at])
+}
+
+// ---------------------------------------------------------------------------
+// report evidence, the public record, and the economy census
+// ---------------------------------------------------------------------------
+//
+// No foreign keys, like every other table here; the SQL API in
+// prisma/postgres/migrations/004_evidence_and_records owns the rules the website
+// is allowed to rely on, and nothing outside a SECURITY DEFINER function ever
+// reads these rows. Evidence lives 30 days or until the report is dismissed,
+// whichever comes first.
+
+model report_input {
+    id Int @id @default(autoincrement())
+
+    // kind is ring | live - a chunk that had already rotated out of the
+    // player's ring when the report arrived, or one captured after it. client
+    // is web | java. `data` is the engine's own record framing, decoded by the
+    // website and never by the database.
+    report_uuid String
+    seq         Int
+    kind        String
+    client      String
+
+    started_at DateTime @db.Timestamptz(3)
+    flushed_at DateTime @db.Timestamptz(3)
+
+    data Bytes
+
+    @@index([report_uuid, seq])
+}
+
+model report_chat {
+    id Int @id @default(autoincrement())
+
+    // the offender's own chat in the report window, copied out of public_chat
+    // and private_chat before the hourly sweep deletes it. kind is public |
+    // private_sent; to_username is null on a public row.
+    report_uuid String
+    at          DateTime @db.Timestamptz(3)
+    kind        String
+    to_username String?
+    coord       Int
+    message     String
+
+    @@index([report_uuid, at])
+}
+
+model punishment {
+    id Int @id @default(autoincrement())
+
+    // kind is ban | mute; `until` null is permanent. automated is true when the
+    // engine issued it rather than a person, and issued_by_account_id is then
+    // null. Neither the issuer nor the flag's source ever reaches the public
+    // page: it says "a moderator" or "automated" and nothing more.
+    account_id Int
+    username   String
+    kind       String
+
+    issued_at            DateTime  @default(now()) @db.Timestamptz(3)
+    until                DateTime? @db.Timestamptz(3)
+    automated            Boolean   @default(false)
+    issued_by_account_id Int?
+
+    // the optional one-line public explanation, and the reversal. The row is
+    // never deleted - that is what makes it a record.
+    note                 String?
+    lifted_at            DateTime? @db.Timestamptz(3)
+    lifted_by_account_id Int?
+
+    @@index([issued_at(sort: Desc)])
+    @@index([account_id])
+}
+
+model staff_spawn {
+    id Int @id @default(autoincrement())
+
+    // every item a staff member creates on a production world, so the economy
+    // census can say "added by staff" rather than leave a step unexplained.
+    // target_account_id is null when the cheat named someone the login server
+    // could not resolve; the spawn still happened.
+    staff_account_id  Int
+    target_account_id Int?
+    item_id           Int
+    count             Int
+    world             Int
+
+    created_at DateTime @default(now()) @db.Timestamptz(3)
+
+    @@index([created_at(sort: Desc)])
+}
+
+model economy_snapshot {
+    id Int @id @default(autoincrement())
+
+    // the hourly census of every save file. `items` is the whole thing as
+    // {item_id: count}; `tracked` is the subset named in
+    // data/config/economy.json, stored beside it so a later edit to that list
+    // cannot rewrite history. coins is item 995 summed across every save, which
+    // passes 2^31 long before the player count does anything interesting.
+    // jsonb here, String on sqlite and Text on mysql - see the note at the top.
+    taken_at DateTime @default(now()) @db.Timestamptz(3)
+    profile  String
+    players  Int
+    coins    BigInt
+    items    Json
+    tracked  Json
+
+    @@index([profile, taken_at(sort: Desc)])
+}
+
+model economy_flow {
+    id Int @id @default(autoincrement())
+
+    // per tracked item, the signed change against the previous snapshot:
+    // positive entered the game, negative left it. Nothing here names an
+    // account.
+    taken_at DateTime @default(now()) @db.Timestamptz(3)
+    profile  String
+    item_id  Int
+    delta    Int
+
+    @@index([profile, taken_at(sort: Desc)])
+}
+
+// ---------------------------------------------------------------------------
+// invites
+// ---------------------------------------------------------------------------
+//
+// Registration is by invitation only. The SQL API in
+// prisma/postgres/migrations/006_invites owns the rules. Claimed rows are the
+// invite tree and are never deleted.
+
+model invite {
+    id Int @id @default(autoincrement())
+
+    code                  String   @unique
+    created_by_account_id Int
+    created_at            DateTime @default(now()) @db.Timestamptz(3)
+    expires_at            DateTime @db.Timestamptz(3)
+
+    claimed_by_account_id Int?
+    claimed_at            DateTime? @db.Timestamptz(3)
+
+    // revoked_reason is 'inviter', 'staff' or 'banned'
+    revoked_at     DateTime? @db.Timestamptz(3)
+    revoked_reason String?
+
+    @@index([created_by_account_id, created_at(sort: Desc)])
+    @@index([claimed_by_account_id])
+}
+
+model invite_attempt {
+    id         Int      @id @default(autoincrement())
+    ip         String
+    created_at DateTime @default(now()) @db.Timestamptz(3)
+
+    @@index([ip, created_at])
+}
+
+// ---------------------------------------------------------------------------
+// records
+// ---------------------------------------------------------------------------
+//
+// Timed XP records, started and stopped from the website. The SQL API in
+// prisma/postgres/migrations/008_records owns the rules, including the partial
+// unique index - one running attempt per account - that Prisma cannot
+// express. Only valid attempts are public, and nothing is ever deleted.
+
+model record_attempt {
+    id Int @id @default(autoincrement())
+
+    account_id       Int
+    profile          String
+    duration_seconds Int
+
+    // state is 'running', 'valid', 'rejected', 'void' or 'abandoned'
+    state  String  @default("running")
+    reason String?
+
+    initial_logout_at DateTime  @db.Timestamptz(3)
+    started_at        DateTime  @default(now()) @db.Timestamptz(3)
+    final_logout_at   DateTime? @db.Timestamptz(3)
+    stopped_at        DateTime? @db.Timestamptz(3)
+    elapsed_ms        BigInt?
+
+    @@index([account_id, started_at(sort: Desc)])
+    @@index([profile, duration_seconds, state])
+}
+
+model record_attempt_skill {
+    attempt_id Int
+    // the hiscore type: 0 is Overall, 1..21 are the skills
+    category   Int
+    start_xp   BigInt
+    end_xp     BigInt?
+    gained     BigInt?
+
+    @@id([attempt_id, category])
+    @@index([category, gained(sort: Desc)])
+}
+
+// The Adventurer Log's raw material (011_adventure_capture): ADVENTURE session
+// log lines, stored by the login server once the save they came with is
+// written. (session_uuid, seq) is unique, so a retried logout adds nothing.
+// category: 0 other, 1 level, 2 milestone, 3 quest, 4 drop, 5 clue,
+// 6 random event, 7 tutorial (src/server/login/Adventure.ts). The log
+// directory (014_adventure_directory) reads the timeline index with category
+// carried in it, a covering index in postgres only.
+model adventure_event {
+    id Int @id @default(autoincrement())
+
+    account_id   Int
+    profile      String
+    session_uuid String
+    seq          Int
+    occurred_at  DateTime @db.Timestamptz(3)
+    category     Int
+    event        String
+
+    @@unique([session_uuid, seq])
+    @@index([account_id, profile, occurred_at(sort: Desc)])
+}
+
+// The body and worn items of a player's last save, for the website's "import
+// from game". kits, colours and worn are JSON arrays of ints.
+model account_look {
+    account_id Int
+    profile    String
+
+    gender  Int
+    kits    String
+    colours String
+    worn    String
+
+    updated_at DateTime @default(now()) @db.Timestamptz(3)
+
+    @@id([account_id, profile])
+}
+
+// Fashionscape (012_adventure_outfits): up to ten looks per account, slot
+// 0..9, one of them the default whose chathead is the player's picture.
+// kits, colours and worn are JSON arrays of ints, as in account_look. At most
+// one default per account is a partial unique index, in postgres only.
+model adventure_outfit {
+    account_id Int
+    slot       Int
+
+    name    String
+    gender  Int
+    kits    String
+    colours String
+    worn    String
+
+    is_default Boolean  @default(false)
+    updated_at DateTime @default(now()) @db.Timestamptz(3)
+
+    @@id([account_id, slot])
+}
+
+// The Adventurer Log (013_adventurer_log): a player's public page. The
+// owner's headline, about, CSS (stored as written, sanitised by the website
+// every time it is drawn), the bitmask of adventure categories hidden, and
+// the one update pinned to the top (015_adventure_timeline_v2).
+model adventure_log_profile {
+    account_id Int @id
+
+    headline          String    @default("")
+    about             String    @default("")
+    custom_css        String    @default("")
+    css_disabled_at   DateTime? @db.Timestamptz(3)
+    hidden_categories Int       @default(0)
+    pinned_update_id  Int?
+
+    updated_at DateTime @default(now()) @db.Timestamptz(3)
+}
+
+// An update the owner posted on their log. Deleted and staff-hidden rows are
+// kept, for reports. edited_at is when the text last changed (015); the
+// earlier text is not kept.
+model adventure_update {
+    id Int @id @default(autoincrement())
+
+    account_id Int
+    body       String
+
+    created_at      DateTime  @default(now()) @db.Timestamptz(3)
+    deleted_at      DateTime? @db.Timestamptz(3)
+    staff_hidden_at DateTime? @db.Timestamptz(3)
+    edited_at       DateTime? @db.Timestamptz(3)
+
+    @@index([account_id, created_at(sort: Desc)])
+}
+
+// A reply under an update, by any player the owner has not blocked.
+model adventure_reply {
+    id Int @id @default(autoincrement())
+
+    update_id         Int
+    author_account_id Int
+    body              String
+
+    created_at      DateTime  @default(now()) @db.Timestamptz(3)
+    deleted_at      DateTime? @db.Timestamptz(3)
+    staff_hidden_at DateTime? @db.Timestamptz(3)
+
+    @@index([update_id, created_at])
+    @@index([author_account_id, created_at])
+}
+
+// Players an owner has blocked from replying on their log.
+model adventure_block {
+    owner_account_id   Int
+    blocked_account_id Int
+
+    created_at DateTime @default(now()) @db.Timestamptz(3)
+
+    @@id([owner_account_id, blocked_account_id])
+}
+
+// A player's gz on an adventure (migration 015). One row per (adventure,
+// giver); no text, so nothing to moderate. Written and read only through the
+// website's functions.
+model adventure_gz {
+    event_id   Int
+    account_id Int
+
+    created_at DateTime @default(now()) @db.Timestamptz(3)
+
+    @@id([event_id, account_id])
+    @@index([account_id, created_at])
+}
+
+// A report of an update, a reply or a whole log, for staff. One open report
+// per reporter per target is a partial unique index, in postgres only.
+// target_kind: 'update' | 'reply' | 'log'; resolution: 'hidden' |
+// 'css_disabled' | 'dismissed'.
+model adventure_report {
+    id Int @id @default(autoincrement())
+
+    reporter_account_id Int
+    target_kind         String
+    target_id           Int
+    reason              String
+
+    created_at             DateTime  @default(now()) @db.Timestamptz(3)
+    resolved_at            DateTime? @db.Timestamptz(3)
+    resolved_by_account_id Int?
+    resolution             String?
+    note                   String?
+
+    @@index([reporter_account_id, created_at])
+    @@index([resolved_at, created_at])
+}

@@ -5,11 +5,17 @@ import { tryParseBoolean, tryParseInt, tryParseString } from '#/util/TryParse.js
 
 export interface WorldConfig {
     easyStartup: boolean;
-    website: {
-        registration: boolean;
+    account: {
+        /**
+         * Create an account for any unknown username typed at the login screen.
+         * Off by default: a world with a website in front of it registers there,
+         * behind whatever gate the website runs.
+         */
+        autoCreate: boolean;
     };
     web: {
         port: number;
+        host: string;
         allowedOrigin: string;
         managementPort: number;
     };
@@ -19,10 +25,17 @@ export interface WorldConfig {
     node: {
         id: number;
         port: number;
+        host: string;
         members: boolean;
         autoSubscribeMembers: boolean;
         xpRate: number;
         production: boolean;
+        /**
+         * Staff level given to logins when the login server is off (a dev world,
+         * or the kit's single player). -1 means unset: 4 when production is off,
+         * as before, and 0 when it is on. See resolveLocalStaffLevel().
+         */
+        localStaffLevel: number;
         minimumWealthValueEvent: number;
         debug: boolean;
         debugProfile: boolean;
@@ -46,11 +59,19 @@ export interface WorldConfig {
     };
     logger: {
         enabled: boolean;
+        /**
+         * Send the session log to the logger server. Off by default: the
+         * "Server check in" every 50 ticks per player is roughly 86,000 rows a
+         * day at thirty players, and nothing reads them. Reports and wealth
+         * events do not go through this flag.
+         */
+        sessionLog: boolean;
         host: string;
         port: number;
     };
     db: {
         backend: string;
+        url: string;
         host: string;
         port: number;
         user: string;
@@ -79,11 +100,12 @@ export function getWorldConfigPath() {
 export function createDefaultWorldConfig(): WorldConfig {
     return {
         easyStartup: false,
-        website: {
-            registration: true
+        account: {
+            autoCreate: false
         },
         web: {
             port: process.platform === 'win32' || process.platform === 'darwin' ? 80 : 8888,
+            host: '0.0.0.0',
             allowedOrigin: '',
             managementPort: 8898
         },
@@ -93,10 +115,12 @@ export function createDefaultWorldConfig(): WorldConfig {
         node: {
             id: 10,
             port: 43594,
+            host: '0.0.0.0',
             members: true,
             autoSubscribeMembers: true,
             xpRate: 1,
             production: false,
+            localStaffLevel: -1,
             minimumWealthValueEvent: 10,
             debug: true,
             debugProfile: false,
@@ -120,11 +144,15 @@ export function createDefaultWorldConfig(): WorldConfig {
         },
         logger: {
             enabled: false,
+            sessionLog: false,
             host: 'localhost',
             port: 43501
         },
         db: {
             backend: 'sqlite',
+            // postgres only, and only as a fallback: DATABASE_URL wins, so the
+            // hub can keep its credentials in /etc/lostcity/hub.env
+            url: '',
             host: 'localhost',
             port: 3306,
             user: 'root',
@@ -183,7 +211,20 @@ export function normalizeWorldConfig(value: unknown): WorldConfig {
         config.db.verbose = tryParseBoolean((value.db as Record<string, unknown>).kyselyVerbose as string | boolean | undefined | null, config.db.verbose);
     }
 
+    // Legacy compatibility: website.registration was the inverse of account.autoCreate.
+    // Without this an existing dev world.json silently gains auto-registration.
+    if (isObject(value) && isObject(value.website) && !isObject(value.account)) {
+        const registration = tryParseBoolean((value.website as Record<string, unknown>).registration as string | boolean | undefined | null, !config.account.autoCreate);
+        config.account.autoCreate = !registration;
+    }
+
     return config;
+}
+
+/** The staff level a local login gets: the explicit setting, else today's rule. */
+export function resolveLocalStaffLevel(config: WorldConfig): number {
+    if (config.node.localStaffLevel >= 0) return config.node.localStaffLevel;
+    return config.node.production ? 0 : 4;
 }
 
 function parseLegacyEnvFile(filePath: string): Record<string, string> {
@@ -222,9 +263,11 @@ function migrateFromLegacyEnv(defaults: WorldConfig, env: Record<string, string>
     const config = structuredClone(defaults);
 
     config.easyStartup = tryParseBoolean(env.EASY_STARTUP, config.easyStartup);
-    config.website.registration = tryParseBoolean(env.WEBSITE_REGISTRATION, config.website.registration);
+    // WEBSITE_REGISTRATION meant "the website registers players", i.e. the inverse
+    config.account.autoCreate = !tryParseBoolean(env.WEBSITE_REGISTRATION, !config.account.autoCreate);
 
     config.web.port = tryParseInt(env.WEB_PORT, config.web.port);
+    config.web.host = tryParseString(env.WEB_HOST, config.web.host);
     config.web.allowedOrigin = tryParseString(env.WEB_ALLOWED_ORIGIN, config.web.allowedOrigin);
     config.web.managementPort = tryParseInt(env.WEB_MANAGEMENT_PORT, config.web.managementPort);
 
@@ -232,10 +275,12 @@ function migrateFromLegacyEnv(defaults: WorldConfig, env: Record<string, string>
 
     config.node.id = tryParseInt(env.NODE_ID, config.node.id);
     config.node.port = tryParseInt(env.NODE_PORT, config.node.port);
+    config.node.host = tryParseString(env.NODE_HOST, config.node.host);
     config.node.members = tryParseBoolean(env.NODE_MEMBERS, config.node.members);
     config.node.autoSubscribeMembers = tryParseBoolean(env.NODE_AUTO_SUBSCRIBE_MEMBERS, config.node.autoSubscribeMembers);
     config.node.xpRate = tryParseInt(env.NODE_XPRATE, config.node.xpRate);
     config.node.production = tryParseBoolean(env.NODE_PRODUCTION, config.node.production);
+    config.node.localStaffLevel = tryParseInt(env.NODE_LOCAL_STAFF_LEVEL, config.node.localStaffLevel);
     config.node.minimumWealthValueEvent = tryParseInt(env.NODE_MINIMUM_WEALTH_VALUE_EVENT, config.node.minimumWealthValueEvent);
     config.node.debug = tryParseBoolean(env.NODE_DEBUG, config.node.debug);
     config.node.debugProfile = tryParseBoolean(env.NODE_DEBUG_PROFILE, config.node.debugProfile);
@@ -256,10 +301,12 @@ function migrateFromLegacyEnv(defaults: WorldConfig, env: Record<string, string>
     config.friend.port = tryParseInt(env.FRIEND_PORT, config.friend.port);
 
     config.logger.enabled = tryParseBoolean(env.LOGGER_SERVER, config.logger.enabled);
+    config.logger.sessionLog = tryParseBoolean(env.LOGGER_SESSION_LOG, config.logger.sessionLog);
     config.logger.host = tryParseString(env.LOGGER_HOST, config.logger.host);
     config.logger.port = tryParseInt(env.LOGGER_PORT, config.logger.port);
 
     config.db.backend = tryParseString(env.DB_BACKEND, config.db.backend);
+    config.db.url = tryParseString(env.DB_URL, config.db.url);
     config.db.host = tryParseString(env.DB_HOST, config.db.host);
     config.db.port = tryParseInt(env.DB_PORT, config.db.port);
     config.db.user = tryParseString(env.DB_USER, config.db.user);
@@ -283,7 +330,17 @@ export function saveWorldConfig(config: WorldConfig) {
     fs.writeFileSync(worldConfigPath, JSON.stringify(config, null, 4) + '\n');
 }
 
+/**
+ * The env var is overlaid here rather than in loadWorldConfig() on purpose: the
+ * setup UI reads the config with GET and writes it straight back with PUT, so a
+ * secret merged into the config object would be persisted into
+ * data/config/world.json on the next save.
+ */
 export function getDatabaseUrl(config: WorldConfig): string {
+    if (config.db.backend === 'postgres') {
+        return process.env.DATABASE_URL ?? config.db.url;
+    }
+
     const user = encodeURIComponent(config.db.user);
     const pass = encodeURIComponent(config.db.pass);
     return `mysql://${user}:${pass}@${config.db.host}:${config.db.port}/${config.db.name}`;

@@ -13,11 +13,11 @@ function readU16BE(data: Uint8Array, offset: number): number {
 }
 
 function readU32BE(data: Uint8Array, offset: number): number {
-    return (((data[offset] << 24) | (data[offset + 1] << 16) | (data[offset + 2] << 8) | data[offset + 3]) >>> 0);
+    return ((data[offset] << 24) | (data[offset + 1] << 16) | (data[offset + 2] << 8) | data[offset + 3]) >>> 0;
 }
 
 function readU32LE(data: Uint8Array, offset: number): number {
-    return ((data[offset]) | (data[offset + 1] << 8) | (data[offset + 2] << 16) | (data[offset + 3] << 24)) >>> 0;
+    return (data[offset] | (data[offset + 1] << 8) | (data[offset + 2] << 16) | (data[offset + 3] << 24)) >>> 0;
 }
 
 function readChunkId(data: Uint8Array, offset: number): string {
@@ -198,7 +198,7 @@ function parseMidiLength(src: Uint8Array): number | null {
     }
 
     const ppq = division || 1;
-    tempos.sort((a, b) => (a.tick - b.tick) || (a.order - b.order));
+    tempos.sort((a, b) => a.tick - b.tick || a.order - b.order);
 
     let currentTempo = 500000;
     let lastTick = 0;
@@ -258,40 +258,63 @@ function unwrapRiffMidi(data: Uint8Array): Uint8Array | null {
 }
 
 export default class Midi {
-    static lengths: number[] = [];
+    /**
+     * Track id -> length in ms, filled in on first use.
+     *
+     * Reading a track means gunzipping it, and eagerly doing that for all 345 of
+     * them at boot cost ~54MB of resident memory - malloc arenas that zlib grows
+     * and never hands back - to keep 345 integers. A world plays a handful of
+     * tracks, so compute them on demand instead.
+     *
+     * A stored 0 means "computed, and unusable", so a missing or corrupt track is
+     * not re-read on every call. That is why this is a Map and not an array: with
+     * `?? 0` there is no way to tell an absent entry from a zero one.
+     */
+    private static readonly lengths = new Map<number, number>();
 
-    static load(): void {
-        const count = OnDemand.cache.count(3);
-        if (!count) {
-            printWarning('No MIDI data in cache.');
-            return;
+    /** Drops the memoised lengths. Call when the cache underneath changes. */
+    static reset(): void {
+        Midi.lengths.clear();
+    }
+
+    private static compute(id: number): number {
+        if (!Number.isInteger(id) || id < 0 || id >= OnDemand.cache.count(3)) {
+            return 0;
         }
 
-        // const start = Date.now();
-        this.lengths = new Array(count).fill(0);
-
-        for (let i = 0; i < count; i++) {
-            const data = OnDemand.cache.read(3, i, true);
-            if (!data) {
-                printWarning(`Missing midi id=${i}`);
-                continue;
-            }
-
-            const length = parseMidiLength(data);
-            if (!length) {
-                printWarning(`Failed to parse midi id=${i}`);
-                continue;
-            }
-
-            this.lengths[i] = length;
+        let data: Uint8Array | null;
+        try {
+            // gunzipSync throws on a corrupt entry, and at boot that took the
+            // whole world down with no handler
+            data = OnDemand.cache.read(3, id, true);
+        } catch (err) {
+            printWarning(`Failed to read midi id=${id}: ${err}`);
+            return 0;
         }
 
-        // const elapsed = Date.now() - start;
-        // printInfo(`Loaded ${count} midi lengths in ${elapsed}ms.`);
+        if (!data) {
+            printWarning(`Missing midi id=${id}`);
+            return 0;
+        }
+
+        const length = parseMidiLength(data);
+        if (!length) {
+            printWarning(`Failed to parse midi id=${id}`);
+            return 0;
+        }
+
+        return length;
     }
 
     static getLength(id: number): number {
-        return this.lengths[id] ?? 0;
+        const cached = Midi.lengths.get(id);
+        if (cached !== undefined) {
+            return cached;
+        }
+
+        const length = Midi.compute(id);
+        Midi.lengths.set(id, length);
+        return length;
     }
 
     static getTickLength(id: number): number {

@@ -3,16 +3,18 @@ import { Worker } from 'worker_threads';
 
 import { collectDefaultMetrics, register } from 'prom-client';
 
-import { packAll } from '#tools/pack/PackAll.js';
 import World from '#/engine/World.js';
 import TcpServer from '#/server/tcp/TcpServer.js';
 import Environment from '#/util/Environment.js';
 import { printError, printInfo } from '#/util/Logger.js';
+import { requestShutdown } from '#/util/Shutdown.js';
 import { startManagementWeb, startWeb } from '#/web.js';
 import OnDemand from '#/engine/OnDemand.js';
 
 if (OnDemand.cache.count(0) !== 9 || OnDemand.cache.count(2) === 0 || !fs.existsSync('data/pack/server/script.dat')) {
     printInfo('Packing cache, please wait until you see the world is ready.');
+
+    const { packAll } = await import('#tools/pack/PackAll.js');
 
     try {
         // todo: different logic so the main thread doesn't have to load pack files
@@ -44,14 +46,8 @@ await startManagementWeb();
 register.setDefaultLabels({ nodeId: Environment.node.id });
 collectDefaultMetrics({ register });
 
-let exiting = false;
 function safeExit() {
-    if (exiting) {
-        return;
-    }
-
-    exiting = true;
-    World.rebootTimer(0);
+    requestShutdown(() => World.rebootTimer(0));
 }
 
 process.on('SIGINT', safeExit);

@@ -1,5 +1,8 @@
+import type { AdventureBatch } from '#/engine/entity/tracking/AdventureEvent.js';
 import InternalClient from '#/server/InternalClient.js';
 import Environment from '#/util/Environment.js';
+
+import { type PlayerReportRequest, type PlayerSpawnRequest } from './index.d.js';
 
 export class LoginClient extends InternalClient {
     private nodeId = 0;
@@ -10,11 +13,12 @@ export class LoginClient extends InternalClient {
         this.nodeId = nodeId;
     }
 
-    public async worldStartup() {
+    // returns true if the startup message reached the login server
+    public async worldStartup(): Promise<boolean> {
         await this.connect();
 
         if (!this.ws || !this.wsr || !this.wsr.checkIfWsLive()) {
-            return;
+            return false;
         }
 
         this.ws.send(
@@ -25,6 +29,8 @@ export class LoginClient extends InternalClient {
                 profile: Environment.node.profile
             })
         );
+
+        return true;
     }
 
     public async playerLogin(username: string, password: string, uid: number, socket: string, remoteAddress: string, reconnecting: boolean, hasSave: boolean) {
@@ -68,7 +74,7 @@ export class LoginClient extends InternalClient {
     }
 
     // returns true if the login server acknowledged the logout
-    public async playerLogout(username: string, save: Uint8Array) {
+    public async playerLogout(username: string, save: Uint8Array, adventure?: AdventureBatch) {
         await this.connect();
 
         if (!this.ws || !this.wsr || !this.wsr.checkIfWsLive()) {
@@ -81,7 +87,8 @@ export class LoginClient extends InternalClient {
             nodeTime: Date.now(),
             profile: Environment.node.profile,
             username,
-            save: Buffer.from(save).toString('base64')
+            save: Buffer.from(save).toString('base64'),
+            adventure
         });
 
         if (reply.error) {
@@ -92,7 +99,7 @@ export class LoginClient extends InternalClient {
     }
 
     // we don't care about acknowledgement, send the save and continue on
-    public async playerAutosave(username: string, save: Uint8Array) {
+    public async playerAutosave(username: string, save: Uint8Array, adventure?: AdventureBatch) {
         await this.connect();
 
         if (!this.ws || !this.wsr || !this.wsr.checkIfWsLive()) {
@@ -106,7 +113,8 @@ export class LoginClient extends InternalClient {
                 nodeTime: Date.now(),
                 profile: Environment.node.profile,
                 username,
-                save: Buffer.from(save).toString('base64')
+                save: Buffer.from(save).toString('base64'),
+                adventure
             })
         );
     }
@@ -145,6 +153,58 @@ export class LoginClient extends InternalClient {
                 staff,
                 username,
                 until
+            })
+        );
+    }
+
+    /**
+     * Report Abuse. Fire and forget, like the ban and mute above: the player
+     * has already been thanked by the time this leaves, and a report is not
+     * worth blocking a game tick on. The world sends its own id and the
+     * reporter's account so the staff inbox can say who and where.
+     *
+     * The whole request travels as one object rather than nine positional
+     * arguments: it is `PlayerReportRequest` minus the discriminator, so the
+     * offender fields the world resolved cannot be dropped on the way through
+     * without the compiler saying so.
+     */
+    public async playerReport(report: Omit<PlayerReportRequest, 'type'>) {
+        await this.connect();
+
+        if (!this.ws || !this.wsr || !this.wsr.checkIfWsLive()) {
+            return;
+        }
+
+        this.ws.send(
+            JSON.stringify({
+                type: 'player_report',
+                nodeId: this.nodeId,
+                nodeTime: Date.now(),
+                profile: Environment.node.profile,
+                ...report
+            })
+        );
+    }
+
+    /**
+     * A staff member conjured an item. Fire and forget: the item is already in
+     * somebody's inventory, and the public spawn log is not worth blocking a
+     * game tick on either.
+     */
+    public async playerSpawn(spawn: Omit<PlayerSpawnRequest, 'type'>) {
+        await this.connect();
+
+        if (!this.ws || !this.wsr || !this.wsr.checkIfWsLive()) {
+            return;
+        }
+
+        this.ws.send(
+            JSON.stringify({
+                type: 'player_spawn',
+                nodeId: this.nodeId,
+                nodeTime: Date.now(),
+                profile: Environment.node.profile,
+                ...spawn
             })
         );
     }
