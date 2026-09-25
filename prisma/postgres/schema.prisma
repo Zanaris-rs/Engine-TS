@@ -598,7 +598,8 @@ model adventure_outfit {
 
 // The Adventurer Log (013_adventurer_log): a player's public page. The
 // owner's headline, about, CSS (stored as written, sanitised by the website
-// every time it is drawn) and the bitmask of adventure categories hidden.
+// every time it is drawn), the bitmask of adventure categories hidden, and
+// the one update pinned to the top (015_adventure_timeline_v2).
 model adventure_log_profile {
     account_id Int @id
 
@@ -613,7 +614,8 @@ model adventure_log_profile {
 }
 
 // An update the owner posted on their log. Deleted and staff-hidden rows are
-// kept, for reports.
+// kept, for reports. edited_at is when the text last changed (015); the
+// earlier text is not kept.
 model adventure_update {
     id Int @id @default(autoincrement())
 

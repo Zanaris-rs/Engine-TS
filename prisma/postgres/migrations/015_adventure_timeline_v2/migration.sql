@@ -25,7 +25,10 @@
 --   must not be a way to learn that something happened sooner.
 --
 -- 300 gz an hour per giver, counted off the table's own rows under an
--- advisory lock, as updates and replies are. What the timeline shows of a
+-- advisory lock. Taking a gz back deletes its row, so this caps the gz a
+-- player holds from the last hour rather than every click: giving and taking
+-- back in a loop is only write load, since a gz notifies nobody. If one ever
+-- does, count take-backs too. What the timeline shows of a
 -- gz leaves out banned givers and givers the owner has blocked, the same as
 -- replies. Blocking does not delete anyone's gz: unblocking brings it back.
 --
