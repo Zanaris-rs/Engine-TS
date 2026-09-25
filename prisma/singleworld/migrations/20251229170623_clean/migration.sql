@@ -383,6 +383,7 @@ CREATE TABLE "adventure_log_profile" (
     "custom_css" TEXT NOT NULL DEFAULT '',
     "css_disabled_at" DATETIME,
     "hidden_categories" INTEGER NOT NULL DEFAULT 0,
+    "pinned_update_id" INTEGER,
     "updated_at" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -393,7 +394,8 @@ CREATE TABLE "adventure_update" (
     "body" TEXT NOT NULL,
     "created_at" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "deleted_at" DATETIME,
-    "staff_hidden_at" DATETIME
+    "staff_hidden_at" DATETIME,
+    "edited_at" DATETIME
 );
 
 -- CreateTable
@@ -414,6 +416,15 @@ CREATE TABLE "adventure_block" (
     "created_at" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
     PRIMARY KEY ("owner_account_id", "blocked_account_id")
+);
+
+-- CreateTable
+CREATE TABLE "adventure_gz" (
+    "event_id" INTEGER NOT NULL,
+    "account_id" INTEGER NOT NULL,
+    "created_at" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    PRIMARY KEY ("event_id", "account_id")
 );
 
 -- CreateTable
@@ -567,3 +578,6 @@ CREATE INDEX "adventure_report_reporter_account_id_created_at_idx" ON "adventure
 
 -- CreateIndex
 CREATE INDEX "adventure_report_resolved_at_created_at_idx" ON "adventure_report"("resolved_at", "created_at");
+
+-- CreateIndex
+CREATE INDEX "adventure_gz_account_id_created_at_idx" ON "adventure_gz"("account_id", "created_at");

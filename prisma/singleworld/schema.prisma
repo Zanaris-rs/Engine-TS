@@ -581,7 +581,8 @@ model adventure_outfit {
 
 // The Adventurer Log (013_adventurer_log): a player's public page. The
 // owner's headline, about, CSS (stored as written, sanitised by the website
-// every time it is drawn) and the bitmask of adventure categories hidden.
+// every time it is drawn), the bitmask of adventure categories hidden, and
+// the one update pinned to the top (015_adventure_timeline_v2).
 model adventure_log_profile {
     account_id Int @id
 
@@ -590,12 +591,14 @@ model adventure_log_profile {
     custom_css        String    @default("")
     css_disabled_at   DateTime?
     hidden_categories Int       @default(0)
+    pinned_update_id  Int?
 
     updated_at DateTime @default(now())
 }
 
 // An update the owner posted on their log. Deleted and staff-hidden rows are
-// kept, for reports.
+// kept, for reports. edited_at is when the text last changed (015); the
+// earlier text is not kept.
 model adventure_update {
     id Int @id @default(autoincrement())
 
@@ -605,6 +608,7 @@ model adventure_update {
     created_at      DateTime  @default(now())
     deleted_at      DateTime?
     staff_hidden_at DateTime?
+    edited_at       DateTime?
 
     @@index([account_id, created_at(sort: Desc)])
 }
@@ -633,6 +637,19 @@ model adventure_block {
     created_at DateTime @default(now())
 
     @@id([owner_account_id, blocked_account_id])
+}
+
+// A player's gz on an adventure (migration 015). One row per (adventure,
+// giver); no text, so nothing to moderate. Written and read only through the
+// website's functions.
+model adventure_gz {
+    event_id   Int
+    account_id Int
+
+    created_at DateTime @default(now())
+
+    @@id([event_id, account_id])
+    @@index([account_id, created_at])
 }
 
 // A report of an update, a reply or a whole log, for staff. One open report
