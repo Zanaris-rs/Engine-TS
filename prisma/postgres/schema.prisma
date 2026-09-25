@@ -542,7 +542,9 @@ model record_attempt_skill {
 // log lines, stored by the login server once the save they came with is
 // written. (session_uuid, seq) is unique, so a retried logout adds nothing.
 // category: 0 other, 1 level, 2 milestone, 3 quest, 4 drop, 5 clue,
-// 6 random event, 7 tutorial (src/server/login/Adventure.ts).
+// 6 random event, 7 tutorial (src/server/login/Adventure.ts). The log
+// directory (014_adventure_directory) reads the timeline index with category
+// carried in it, a covering index in postgres only.
 model adventure_event {
     id Int @id @default(autoincrement())
 
