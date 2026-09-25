@@ -62,6 +62,11 @@ export type adventure_event = {
     category: number;
     event: string;
 };
+export type adventure_gz = {
+    event_id: number;
+    account_id: number;
+    created_at: Generated<Timestamp>;
+};
 export type adventure_log_profile = {
     account_id: number;
     headline: Generated<string>;
@@ -69,6 +74,7 @@ export type adventure_log_profile = {
     custom_css: Generated<string>;
     css_disabled_at: Timestamp | null;
     hidden_categories: Generated<number>;
+    pinned_update_id: number | null;
     updated_at: Generated<Timestamp>;
 };
 export type adventure_outfit = {
@@ -110,6 +116,7 @@ export type adventure_update = {
     created_at: Generated<Timestamp>;
     deleted_at: Timestamp | null;
     staff_hidden_at: Timestamp | null;
+    edited_at: Timestamp | null;
 };
 export type economy_flow = {
     id: Generated<number>;
@@ -347,6 +354,7 @@ export type DB = {
     account_message: account_message;
     adventure_block: adventure_block;
     adventure_event: adventure_event;
+    adventure_gz: adventure_gz;
     adventure_log_profile: adventure_log_profile;
     adventure_outfit: adventure_outfit;
     adventure_reply: adventure_reply;

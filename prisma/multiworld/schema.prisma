@@ -595,6 +595,7 @@ model adventure_log_profile {
     custom_css        String    @default("") @db.Text
     css_disabled_at   DateTime?
     hidden_categories Int       @default(0)
+    pinned_update_id  Int?
 
     updated_at DateTime @default(now())
 }
@@ -610,6 +611,7 @@ model adventure_update {
     created_at      DateTime  @default(now())
     deleted_at      DateTime?
     staff_hidden_at DateTime?
+    edited_at       DateTime?
 
     @@index([account_id, created_at(sort: Desc)])
 }
@@ -638,6 +640,19 @@ model adventure_block {
     created_at DateTime @default(now())
 
     @@id([owner_account_id, blocked_account_id])
+}
+
+// A player's gz on an adventure (migration 015). One row per (adventure,
+// giver); no text, so nothing to moderate. Written and read only through the
+// website's functions.
+model adventure_gz {
+    event_id   Int
+    account_id Int
+
+    created_at DateTime @default(now())
+
+    @@id([event_id, account_id])
+    @@index([account_id, created_at])
 }
 
 // A report of an update, a reply or a whole log, for staff. One open report
