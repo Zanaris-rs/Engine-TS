@@ -388,6 +388,25 @@ CREATE TABLE "adventure_log_profile" (
 );
 
 -- CreateTable
+CREATE TABLE "adventure_persona" (
+    "account_id" INTEGER NOT NULL PRIMARY KEY,
+    "headline_colour" INTEGER NOT NULL DEFAULT 0,
+    "headline_effect" INTEGER NOT NULL DEFAULT 0,
+    "title" TEXT NOT NULL DEFAULT '',
+    "examine" TEXT NOT NULL DEFAULT '',
+    "hangout" TEXT NOT NULL DEFAULT '',
+    "clan" TEXT NOT NULL DEFAULT '',
+    "goals" TEXT NOT NULL DEFAULT '[]',
+    "god" TEXT,
+    "home_town" TEXT,
+    "playstyle" TEXT,
+    "scene" TEXT,
+    "signature_emote" TEXT,
+    "dialogue" TEXT NOT NULL DEFAULT '[]',
+    "updated_at" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+-- CreateTable
 CREATE TABLE "adventure_update" (
     "id" INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
     "account_id" INTEGER NOT NULL,
