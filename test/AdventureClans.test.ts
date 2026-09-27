@@ -370,6 +370,7 @@ test('the rollback is all comments and undoes everything', () => {
     assert.ok(rollback.includes('-- ALTER TABLE "adventure_persona" ADD COLUMN IF NOT EXISTS "playstyle" TEXT;'), 'playstyle comes back');
     assert.ok(rollback.includes('-- DELETE FROM "adventure_report" WHERE "target_kind" = \'clan\';'), 'clan reports go before the kind does');
     assert.ok(rollback.includes('016_adventure_persona') && rollback.includes('013_adventurer_log'), 'says where the replaced functions come back from');
+    assert.ok(rollback.includes('Roll the Website back to its state before W4 (Website PR #53) BEFORE'), 'says the Website goes back first');
 });
 
 test('every backend has the four tables, and the persona without clan and playstyle', () => {

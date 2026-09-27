@@ -1270,6 +1270,11 @@ GRANT EXECUTE ON FUNCTION accounts.clan_notice_delete(text, int) TO website;
 -- 013_adventurer_log, the blocks of adventure_report and
 -- staff_adventure_reports. Take a dump first.
 --
+-- Roll the Website back to its state before W4 (Website PR #53) BEFORE
+-- running this rollback: W4 and every later Website PR read 017's shapes
+-- (the persona's facing, the three persona writers and the clan functions),
+-- so while W4 is live, 017 only goes forward.
+--
 -- DELETE FROM "adventure_report" WHERE "target_kind" = 'clan';
 -- ALTER TABLE "adventure_report" DROP CONSTRAINT IF EXISTS "adventure_report_kind";
 -- ALTER TABLE "adventure_report" ADD CONSTRAINT "adventure_report_kind" CHECK ("target_kind" IN ('update', 'reply', 'log'));
