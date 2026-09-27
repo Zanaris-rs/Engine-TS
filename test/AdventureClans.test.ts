@@ -22,11 +22,13 @@ function modelBody(schema: string, model: string): string {
 }
 
 const migration = read('../prisma/postgres/migrations/017_adventure_clans/migration.sql');
-// Every migration before this one, for what the website could already call.
+// Every migration before this one, in order, for what the website could
+// already call.
 const earlier = readdirSync(new URL('../prisma/postgres/migrations', import.meta.url), { withFileTypes: true })
     .filter(entry => entry.isDirectory() && /^\d{3}_/.test(entry.name) && entry.name < '017_')
-    .map(entry => read(`../prisma/postgres/migrations/${entry.name}/migration.sql`))
-    .join('\n');
+    .map(entry => entry.name)
+    .sort()
+    .map(name => read(`../prisma/postgres/migrations/${name}/migration.sql`));
 const mysqlMigration = read('../prisma/multiworld/migrations/20260927000000_adventure_clans/migration.sql');
 const sqliteBaseline = read('../prisma/singleworld/migrations/20251229170623_clean/migration.sql');
 const types = read('../src/db/types.ts');
@@ -52,6 +54,21 @@ function functions(sql: string): Map<string, { header: string; body: string }> {
         found.set(match[1], { header: sql.slice(start, open), body: sql.slice(open + 2, close) });
     }
     return found;
+}
+
+// The functions the `website` role may run after a migration's statements,
+// replayed line by line: a GRANT to it adds a signature, and a REVOKE from it
+// or a DROP takes one away (a dropped function loses its grants).
+function replay(sql: string, granted: ReadonlySet<string>): Set<string> {
+    const after = new Set(granted);
+    for (const [, verb, signature, role] of sql.matchAll(/^(GRANT|REVOKE|DROP) [A-Z ]*?accounts\.(.+?)(?: (?:TO|FROM) (\w+))?;$/gm)) {
+        if (verb === 'GRANT' && role === 'website') {
+            after.add(signature);
+        } else if ((verb === 'REVOKE' && role === 'website') || verb === 'DROP') {
+            after.delete(signature);
+        }
+    }
+    return after;
 }
 
 const defined = functions(live);
@@ -111,7 +128,7 @@ const COLUMNS: Record<string, string[]> = {
     adventure_clan: ['id', 'name', 'slug', 'motto', 'crest', 'world', 'about', 'perm_invite', 'perm_remove', 'perm_ranks', 'perm_page', 'created_at', 'updated_at'],
     adventure_clan_member: ['account_id', 'clan_id', 'rank', 'joined_at'],
     adventure_clan_invite: ['clan_id', 'account_id', 'invited_by_account_id', 'created_at'],
-    adventure_clan_notice: ['id', 'clan_id', 'author_account_id', 'title', 'body', 'created_at']
+    adventure_clan_notice: ['id', 'clan_id', 'author_account_id', 'title', 'body', 'created_at', 'deleted_at']
 };
 const INDEXES = ['adventure_clan_member_clan_id_idx', 'adventure_clan_invite_account_id_idx', 'adventure_clan_notice_clan_id_created_at_idx'];
 const SLUG_KEY = 'adventure_clan_slug_key';
@@ -122,16 +139,18 @@ test('the website may call exactly these twenty-four, which take it from 86 to 1
     for (const signature of [...GRANTED, ...WITHHELD]) {
         assert.ok(live.includes(`REVOKE ALL ON FUNCTION accounts.${signature} FROM PUBLIC;`), `revoke ${signature}`);
     }
-    // Counted from the files, not the lists above: a GRANT line is new when
-    // no earlier migration granted that signature, and a function an earlier
-    // one granted leaves when this one drops it and does not grant it again.
-    const grantedBefore = (signature: string) => earlier.includes(`\nGRANT EXECUTE ON FUNCTION accounts.${signature} TO website;`);
-    const added = grants.filter(signature => !grantedBefore(signature));
-    const dropped = [...live.matchAll(/^DROP FUNCTION IF EXISTS accounts\.(.+?);$/gm)].map(m => m[1]).filter(signature => grantedBefore(signature) && !grants.includes(signature));
+    // Counted from the files, not the lists above: 000..016 replayed give
+    // what the website could run before, and this migration replayed on top
+    // gives what it can run after.
+    const before = earlier.reduce((granted: ReadonlySet<string>, sql) => replay(sql, granted), new Set<string>());
+    const after = replay(live, before);
+    const added = grants.filter(signature => !before.has(signature));
+    const dropped = [...before].filter(signature => !after.has(signature));
     assert.equal(grants.length, 24, 'twenty-four GRANT lines');
     assert.equal(added.length, 23, 'twenty-three of them new: adventure_persona is granted again after being made anew');
     assert.deepEqual(dropped, [DROPPED[0]], 'adventure_persona_save is the one granted function to go');
-    assert.equal(86 - dropped.length + added.length, 108, 'adventure_persona_save goes, twenty-three come');
+    assert.equal(before.size, 86, '000..016 leave the website eighty-six functions');
+    assert.equal(after.size, 108, 'and this one takes it to one hundred and eight');
     const header = live.slice(0, live.indexOf('\n\n')).replace(/\n--\s?/g, ' ');
     assert.ok(header.includes('The `website` role goes from eighty-six functions to one hundred and eight.'), 'the header says so');
 });
@@ -237,6 +256,20 @@ test('a mute stops words, not picks', () => {
     assert.ok(fn('adventure_persona_save_words').body.includes('accounts.adventure_dialogue_lines(v_old.dialogue) IS DISTINCT FROM accounts.adventure_dialogue_lines(v_dialogue)'), 'the lines, in order');
     assert.ok(fn('adventure_persona_save_sheet').body.includes('(v_old.title, v_old.examine, v_old.hangout, v_old.goals)'), "the sheet's words");
     assert.ok(fn('clan_save_page').body.includes('(v_clan.name, v_clan.motto, v_clan.about) IS DISTINCT FROM (p_name, v_motto, v_about)'), "the page's words");
+    // A muted save compares the stored words and then writes; a staff hide
+    // on the log blanks them. Both take the persona's lock first, so a save
+    // cannot read the words before a hide and write them back after it.
+    for (const name of ['adventure_persona_save_words', 'adventure_persona_save_sheet']) {
+        const body = fn(name).body;
+        const lock = body.indexOf("PERFORM pg_advisory_xact_lock(hashtext('adventure_persona:' || v_author.account_id));");
+        assert.ok(lock !== -1 && lock < body.indexOf('muted_until') && lock < body.indexOf('INSERT INTO'), `${name}: the persona lock, before the old words are read`);
+    }
+    const resolve = fn('staff_adventure_resolve').body;
+    const logLock = resolve.indexOf("PERFORM pg_advisory_xact_lock(hashtext('adventure_persona:' || v_report.target_id));");
+    assert.ok(
+        logLock > resolve.indexOf("ELSIF v_report.target_kind = 'clan' THEN") && logLock < resolve.indexOf("UPDATE public.adventure_log_profile SET headline = ''") && logLock < resolve.indexOf("UPDATE public.adventure_persona SET title = ''"),
+        "a log hide takes the persona's lock before it blanks the words"
+    );
 });
 
 test("clan writes and a staff hide hold the clan's lock; creating and joining hold the account's too", () => {
@@ -250,7 +283,7 @@ test("clan writes and a staff hide hold the clan's lock; creating and joining ho
     const resolve = fn('staff_adventure_resolve').body;
     const hide = resolve.slice(resolve.indexOf("ELSIF v_report.target_kind = 'clan' THEN"));
     const hideLock = hide.indexOf("PERFORM pg_advisory_xact_lock(hashtext('clan:' || v_report.target_id));");
-    assert.ok(hideLock !== -1 && hideLock < hide.indexOf('UPDATE public.adventure_clan ') && hideLock < hide.indexOf('DELETE FROM public.adventure_clan_notice'), 'a staff hide takes the clan lock before it writes');
+    assert.ok(hideLock !== -1 && hideLock < hide.indexOf('UPDATE public.adventure_clan ') && hideLock < hide.indexOf('UPDATE public.adventure_clan_notice'), 'a staff hide takes the clan lock before it writes');
     const answer = fn('clan_invite_answer').body;
     const clanLock = answer.indexOf("pg_advisory_xact_lock(hashtext('clan:' || p_clan_id))");
     const accountLock = answer.indexOf("pg_advisory_xact_lock(hashtext('clan-account:' || v_author.account_id))");
@@ -263,10 +296,20 @@ test('the limits', () => {
     assert.ok(invite.includes(">= 50 THEN RETURN 'full';"), '50 members');
     assert.ok(invite.includes(">= 20 THEN RETURN 'too_many';"), '20 pending invites');
     assert.ok(/>= 50 THEN\s+RETURN 'full';/.test(fn('clan_invite_answer').body), '50 members, when accepting');
+    // Ten notices a clan a day, counting deleted ones: deleting a notice (or
+    // a staff hide) marks it, and does not free its place in the day.
     const post = fn('clan_notice_post').body;
     assert.ok(post.includes("n.created_at > now() - interval '1 day') >= 10 THEN"), 'ten notices a day');
-    assert.ok(post.includes('ORDER BY k.created_at DESC, k.id DESC') && post.includes('LIMIT 20);'), 'the newest twenty kept');
-    assert.ok(fn('clan_notices').body.includes('LIMIT 20;'), 'twenty shown');
+    const today = post.slice(post.indexOf('IF (SELECT count(*) FROM public.adventure_clan_notice n'), post.indexOf("RETURN 'rate_limited';"));
+    assert.ok(today.includes('>= 10 THEN') && !today.includes('deleted_at'), 'the ten a day count deleted notices too');
+    assert.ok(post.includes('WHERE k.clan_id = v_me.clan_id AND k.deleted_at IS NULL') && post.includes('ORDER BY k.created_at DESC, k.id DESC') && post.includes('LIMIT 20)'), 'the newest twenty live notices kept');
+    assert.ok(post.includes("n.deleted_at IS NOT NULL AND n.created_at <= now() - interval '1 day'"), 'a deleted notice goes once it no longer counts for the day');
+    const notices = fn('clan_notices').body;
+    assert.ok(notices.includes('n.deleted_at IS NULL') && notices.includes('LIMIT 20;'), 'twenty shown, none deleted');
+    const remove = fn('clan_notice_delete').body;
+    assert.ok(remove.includes('WHERE n.id = p_id AND n.clan_id = v_me.clan_id AND n.deleted_at IS NULL;'), 'a deleted notice is no_notice');
+    assert.ok(remove.includes('UPDATE public.adventure_clan_notice n SET deleted_at = now() WHERE n.id = p_id;') && !remove.includes('DELETE FROM'), 'deleting marks the notice');
+    assert.ok(fn('clan_disband').body.includes('DELETE FROM public.adventure_clan_notice n WHERE n.clan_id = v_me.clan_id;'), 'disbanding deletes every notice for good');
     const directory = fn('clan_directory').body;
     assert.ok(directory.includes('WHERE v.members > 0') && directory.includes('ORDER BY v.members DESC, c.name, c.id') && directory.includes('LIMIT 200;'), 'the directory');
 });
@@ -290,7 +333,8 @@ test('reports cover clans, and a staff hide renames one', () => {
     assert.ok(reports.includes("LEFT JOIN public.adventure_clan_member cm ON cm.clan_id = c.id AND cm.rank = 'leader'"), 'the author is the Leader');
     const resolve = fn('staff_adventure_resolve').body;
     assert.ok(resolve.includes("UPDATE public.adventure_clan SET name = 'Clan ' || v_report.target_id, slug = 'clan-' || v_report.target_id, motto = '', about = ''"), 'renamed and blanked');
-    assert.ok(resolve.includes('DELETE FROM public.adventure_clan_notice WHERE clan_id = v_report.target_id;'), 'its notices deleted');
+    assert.ok(resolve.includes('UPDATE public.adventure_clan_notice SET deleted_at = now() WHERE clan_id = v_report.target_id AND deleted_at IS NULL;'), 'its notices deleted, and still counted for the day');
+    assert.ok(!resolve.includes('DELETE FROM public.adventure_clan_notice'), 'marked, not removed');
     assert.ok(resolve.includes("UPDATE public.adventure_persona SET title = '', examine = '', hangout = '', goals = '[]', dialogue = '[]', updated_at = now() WHERE account_id = v_report.target_id;"), 'a log hide without the clan column');
     assert.ok(!resolve.includes("clan = ''"), 'no clan column left to blank');
 });
@@ -318,6 +362,9 @@ test('the rollback is all comments and undoes everything', () => {
     for (const table of Object.keys(COLUMNS)) {
         assert.ok(rollback.includes(`-- DROP TABLE IF EXISTS "${table}";`), `drop ${table}`);
     }
+    // deleted_at is a column of 017's own CREATE TABLE, never added by an
+    // ALTER, so dropping adventure_clan_notice drops it too.
+    assert.ok(!/ADD COLUMN[^;]*"deleted_at"/.test(live), 'deleted_at comes and goes with its table');
     assert.ok(rollback.includes('-- ALTER TABLE "adventure_persona" DROP COLUMN IF EXISTS "facing";'), 'facing goes');
     assert.ok(rollback.includes('-- ALTER TABLE "adventure_persona" ADD COLUMN IF NOT EXISTS "clan" TEXT NOT NULL DEFAULT \'\';'), 'clan comes back');
     assert.ok(rollback.includes('-- ALTER TABLE "adventure_persona" ADD COLUMN IF NOT EXISTS "playstyle" TEXT;'), 'playstyle comes back');
@@ -326,15 +373,23 @@ test('the rollback is all comments and undoes everything', () => {
 });
 
 test('every backend has the four tables, and the persona without clan and playstyle', () => {
-    for (const [table, columns] of Object.entries(COLUMNS)) {
-        assert.ok(mysqlMigration.includes(`CREATE TABLE \`${table}\` (`), `mysql ${table}`);
-        assert.ok(sqliteBaseline.includes(`CREATE TABLE "${table}" (`), `sqlite ${table}`);
+    // A table's statement, from its CREATE TABLE to its closing parenthesis.
+    const table = (sql: string, open: string) => {
+        const start = sql.indexOf(open);
+        assert.notEqual(start, -1, open);
+        return sql.slice(start, sql.indexOf('\n)', start));
+    };
+    for (const [name, columns] of Object.entries(COLUMNS)) {
+        const postgres = table(live, `CREATE TABLE IF NOT EXISTS "${name}" (`);
+        const mysql = table(mysqlMigration, `CREATE TABLE \`${name}\` (`);
+        const sqlite = table(sqliteBaseline, `CREATE TABLE "${name}" (`);
         for (const column of columns) {
-            assert.ok(live.includes(`"${column}"`), `postgres ${table}.${column}`);
-            assert.ok(mysqlMigration.includes(`\`${column}\``), `mysql ${table}.${column}`);
-            assert.ok(sqliteBaseline.includes(`"${column}"`), `sqlite ${table}.${column}`);
+            assert.ok(postgres.includes(`\n    "${column}" `), `postgres ${name}.${column}`);
+            assert.ok(mysql.includes(`\n    \`${column}\` `), `mysql ${name}.${column}`);
+            assert.ok(sqlite.includes(`\n    "${column}" `), `sqlite ${name}.${column}`);
         }
     }
+    assert.ok(table(live, 'CREATE TABLE IF NOT EXISTS "adventure_clan_notice" (').includes('\n    "deleted_at" TIMESTAMPTZ(3),'), 'postgres: a notice can be deleted');
     for (const index of [...INDEXES, SLUG_KEY]) {
         assert.ok(mysqlMigration.includes(`\`${index}\``), `mysql ${index}`);
         assert.ok(sqliteBaseline.includes(`INDEX "${index}"`), `sqlite ${index}`);
@@ -375,5 +430,7 @@ test('the generated types know the new tables and the new persona', () => {
     const persona = types.slice(types.indexOf('export type adventure_persona = {'));
     const personaType = persona.slice(0, persona.indexOf('};'));
     assert.ok(personaType.includes('facing: Generated<number>;'), 'facing');
+    const notice = types.slice(types.indexOf('export type adventure_clan_notice = {'));
+    assert.ok(notice.slice(0, notice.indexOf('};')).includes('deleted_at: Timestamp | null;'), 'a notice can be deleted');
     assert.ok(!/\b(clan|playstyle):/.test(personaType), 'no clan, no playstyle');
 });

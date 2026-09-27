@@ -86,6 +86,7 @@ export type adventure_clan_notice = {
     title: string;
     body: string;
     created_at: Generated<Timestamp>;
+    deleted_at: Timestamp | null;
 };
 export type adventure_event = {
     id: Generated<number>;

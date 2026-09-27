@@ -680,7 +680,8 @@ model adventure_clan_invite {
 }
 
 // A notice on a clan's page, from Captain and up by default. The newest
-// twenty are kept.
+// twenty are kept. Deleting one sets deleted_at: it keeps its place in the
+// clan's ten a day, and goes for good once its day is over.
 model adventure_clan_notice {
     id Int @id @default(autoincrement())
 
@@ -689,7 +690,8 @@ model adventure_clan_notice {
     title             String
     body              String @db.VarChar(280)
 
-    created_at DateTime @default(now())
+    created_at DateTime  @default(now())
+    deleted_at DateTime?
 
     @@index([clan_id, created_at])
 }

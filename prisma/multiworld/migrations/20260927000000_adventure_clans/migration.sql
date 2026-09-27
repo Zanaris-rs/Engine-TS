@@ -53,6 +53,7 @@ CREATE TABLE `adventure_clan_notice` (
     `title` VARCHAR(191) NOT NULL,
     `body` VARCHAR(280) NOT NULL,
     `created_at` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+    `deleted_at` DATETIME(3) NULL,
 
     INDEX `adventure_clan_notice_clan_id_created_at_idx`(`clan_id`, `created_at`),
     PRIMARY KEY (`id`)

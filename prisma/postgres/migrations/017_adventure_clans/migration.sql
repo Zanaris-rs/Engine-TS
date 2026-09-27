@@ -33,7 +33,10 @@
 --   clan, its members, its invites and its notices.
 -- - **Limits:** 50 members, the Leader included; 20 pending invites; the
 --   newest 20 notices kept, older ones deleted on insert; 10 notices per clan
---   per day.
+--   per day, counting deleted ones. Deleting a notice (or a staff "hide")
+--   only marks it (deleted_at), so it keeps its place in the day and cannot
+--   be posted, deleted and posted again; a marked notice is removed for good
+--   by the first post after its day is over.
 -- - **Names** are 1..20 letters, digits and single spaces, starting and
 --   ending with a letter or digit, checked as given (not trimmed). The slug
 --   is the name lower-cased with each space a '-', unique, so two names that
@@ -64,8 +67,8 @@
 --   hand-over to a banned member is 'no_such_member'.
 -- - **Reports** gain the kind 'clan', whose target id is the clan's id. A
 --   member reporting their own clan is 'self'. A staff "hide" on a clan
---   blanks the motto and About, deletes the notices and renames the clan
---   'Clan <id>' (slug 'clan-<id>'). Staff can mute the author as usual.
+--   blanks the motto and About, deletes (marks) the notices and renames the
+--   clan 'Clan <id>' (slug 'clan-<id>'). Staff can mute the author as usual.
 --
 -- ## The persona
 --
@@ -81,7 +84,10 @@
 --   save_stage (scene, facing). A mute refuses save_words when the headline
 --   or the dialogue's lines (in order, as one list) would change, and
 --   save_sheet when the title, examine, hangout or a goal would; save_stage
---   is picks only.
+--   is picks only. save_words and save_sheet take a lock on the account's
+--   persona before they read the old words, and a staff "hide" on a log
+--   takes it before it blanks them, so a muted save cannot read the words
+--   before a hide and write them back after it.
 --
 -- adventure_report, staff_adventure_reports and staff_adventure_resolve are
 -- replaced in place, same signatures, keeping their grants: reports cover
@@ -171,6 +177,7 @@ CREATE TABLE IF NOT EXISTS "adventure_clan_notice" (
     "title" TEXT NOT NULL,
     "body" TEXT NOT NULL,
     "created_at" TIMESTAMPTZ(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "deleted_at" TIMESTAMPTZ(3),
 
     CONSTRAINT "adventure_clan_notice_pkey" PRIMARY KEY ("id"),
     CONSTRAINT "adventure_clan_notice_title" CHECK (length("title") BETWEEN 1 AND 40 AND position(E'\n' IN "title") = 0),
@@ -297,6 +304,9 @@ BEGIN
     IF p_emote IS NOT NULL AND NOT (p_emote = ANY (accounts.adventure_emotes())) THEN RETURN 'bad_emote'; END IF;
     IF v_dialogue IS NULL THEN RETURN 'bad_dialogue'; END IF;
 
+    -- A staff "hide" on the log blanks these words under the same lock, so
+    -- the words read below cannot be written back over a hide.
+    PERFORM pg_advisory_xact_lock(hashtext('adventure_persona:' || v_author.account_id));
     SELECT a.muted_until IS NOT NULL AND a.muted_until > now() INTO v_muted
       FROM public.account a WHERE a.id = v_author.account_id;
     IF v_muted THEN
@@ -352,6 +362,9 @@ BEGIN
     IF p_god IS NOT NULL AND p_god NOT IN ('saradomin', 'zamorak', 'guthix') THEN RETURN 'bad_god'; END IF;
     IF p_home IS NOT NULL AND p_home !~ '^[a-z_]{1,24}$' THEN RETURN 'bad_key'; END IF;
 
+    -- A staff "hide" on the log blanks these words under the same lock, so
+    -- the words read below cannot be written back over a hide.
+    PERFORM pg_advisory_xact_lock(hashtext('adventure_persona:' || v_author.account_id));
     SELECT a.muted_until IS NOT NULL AND a.muted_until > now() INTO v_muted
       FROM public.account a WHERE a.id = v_author.account_id;
     IF v_muted THEN
@@ -439,8 +452,9 @@ LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $$
      ORDER BY accounts.clan_rank_level(m.rank), m.joined_at, a.username;
 $$;
 
--- A clan's notices, newest first, at most 20. `author_rank` is NULL once the
--- author has left the clan; a banned author's notices are not shown.
+-- A clan's notices, newest first, at most 20; deleted ones are not shown.
+-- `author_rank` is NULL once the author has left the clan; a banned author's
+-- notices are not shown.
 CREATE OR REPLACE FUNCTION accounts.clan_notices(p_clan_id int)
 RETURNS TABLE (id int, title text, body text, author text, author_rank text, created_at timestamptz)
 LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $$
@@ -449,6 +463,7 @@ LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $$
       JOIN public.account a ON a.id = n.author_account_id
       LEFT JOIN public.adventure_clan_member m ON m.account_id = n.author_account_id AND m.clan_id = n.clan_id
      WHERE n.clan_id = p_clan_id
+       AND n.deleted_at IS NULL
        AND (a.banned_until IS NULL OR a.banned_until <= now())
      ORDER BY n.created_at DESC, n.id DESC
      LIMIT 20;
@@ -913,8 +928,10 @@ BEGIN
 END;
 $$;
 
--- Post a notice. Words, so a mute stops it. Ten per clan a day; the newest
--- twenty are kept and older ones deleted here.
+-- Post a notice. Words, so a mute stops it. Ten per clan a day, counting the
+-- deleted ones, so deleting does not free a place. The newest twenty live
+-- notices are kept and older ones deleted here, and so are deleted ones once
+-- their day is over.
 -- 'ok' | 'not_found' | 'banned' | 'muted' | 'not_member' | 'forbidden' |
 -- 'bad_title' | 'bad_body' | 'rate_limited'.
 CREATE OR REPLACE FUNCTION accounts.clan_notice_post(p_username text, p_title text, p_body text)
@@ -936,6 +953,7 @@ BEGIN
 
     IF v_title IS NULL OR position(E'\n' IN v_title) > 0 THEN RETURN 'bad_title'; END IF;
     IF v_body IS NULL THEN RETURN 'bad_body'; END IF;
+    -- every notice made in the last day, deleted or not
     IF (SELECT count(*) FROM public.adventure_clan_notice n
          WHERE n.clan_id = v_me.clan_id AND n.created_at > now() - interval '1 day') >= 10 THEN
         RETURN 'rate_limited';
@@ -943,17 +961,24 @@ BEGIN
 
     INSERT INTO public.adventure_clan_notice (clan_id, author_account_id, title, body)
     VALUES (v_me.clan_id, v_author.account_id, v_title, v_body);
+    -- Live notices past the newest twenty, and deleted ones that no longer
+    -- count towards the day, go for good. Ten a day keeps every notice from
+    -- the last day among the newest twenty.
     DELETE FROM public.adventure_clan_notice n
      WHERE n.clan_id = v_me.clan_id
-       AND n.id NOT IN (SELECT k.id FROM public.adventure_clan_notice k
-                         WHERE k.clan_id = v_me.clan_id
-                         ORDER BY k.created_at DESC, k.id DESC
-                         LIMIT 20);
+       AND ((n.deleted_at IS NULL
+             AND n.id NOT IN (SELECT k.id FROM public.adventure_clan_notice k
+                               WHERE k.clan_id = v_me.clan_id AND k.deleted_at IS NULL
+                               ORDER BY k.created_at DESC, k.id DESC
+                               LIMIT 20))
+            OR (n.deleted_at IS NOT NULL AND n.created_at <= now() - interval '1 day'));
     RETURN 'ok';
 END;
 $$;
 
--- Delete a notice: its author, or anyone the "page" threshold allows.
+-- Delete a notice: its author, or anyone the "page" threshold allows. It is
+-- marked, not removed, so it still counts towards the clan's ten a day; a
+-- notice already deleted is 'no_notice'.
 -- 'ok' | 'not_found' | 'banned' | 'not_member' | 'forbidden' | 'no_notice'.
 CREATE OR REPLACE FUNCTION accounts.clan_notice_delete(p_username text, p_id int)
 RETURNS text
@@ -970,14 +995,14 @@ BEGIN
 
     SELECT n.author_account_id INTO v_notice_author
       FROM public.adventure_clan_notice n
-     WHERE n.id = p_id AND n.clan_id = v_me.clan_id;
+     WHERE n.id = p_id AND n.clan_id = v_me.clan_id AND n.deleted_at IS NULL;
     IF v_notice_author IS NULL THEN RETURN 'no_notice'; END IF;
     IF v_notice_author <> v_author.account_id
        AND v_me.rank_level > (SELECT c.perm_page FROM public.adventure_clan c WHERE c.id = v_me.clan_id) THEN
         RETURN 'forbidden';
     END IF;
 
-    DELETE FROM public.adventure_clan_notice n WHERE n.id = p_id;
+    UPDATE public.adventure_clan_notice n SET deleted_at = now() WHERE n.id = p_id;
     RETURN 'ok';
 END;
 $$;
@@ -1097,7 +1122,7 @@ $$;
 --
 -- p_action is 'hide' (the update or reply; for a log, its headline, about
 -- and persona words are cleared; for a clan (017), its motto and About are
--- cleared, its notices deleted and it is renamed 'Clan <id>'),
+-- cleared, its notices deleted (marked) and it is renamed 'Clan <id>'),
 -- 'disable_css' (a log only) or 'dismiss'. The typed password is checked the
 -- way staff_report_resolve checks it, in the same limiter.
 CREATE OR REPLACE FUNCTION accounts.staff_adventure_resolve(p_actor text, p_candidate_hash text,
@@ -1139,8 +1164,11 @@ BEGIN
             -- the clan's lock, which every clan write takes first
             PERFORM pg_advisory_xact_lock(hashtext('clan:' || v_report.target_id));
             UPDATE public.adventure_clan SET name = 'Clan ' || v_report.target_id, slug = 'clan-' || v_report.target_id, motto = '', about = '', updated_at = now() WHERE id = v_report.target_id;
-            DELETE FROM public.adventure_clan_notice WHERE clan_id = v_report.target_id;
+            -- marked, so they still count towards the clan's ten a day
+            UPDATE public.adventure_clan_notice SET deleted_at = now() WHERE clan_id = v_report.target_id AND deleted_at IS NULL;
         ELSE
+            -- the persona's lock, which a save of its words takes first (017)
+            PERFORM pg_advisory_xact_lock(hashtext('adventure_persona:' || v_report.target_id));
             UPDATE public.adventure_log_profile SET headline = '', about = '', updated_at = now() WHERE account_id = v_report.target_id;
             UPDATE public.adventure_persona SET title = '', examine = '', hangout = '', goals = '[]', dialogue = '[]', updated_at = now() WHERE account_id = v_report.target_id;
         END IF;
@@ -1233,8 +1261,9 @@ GRANT EXECUTE ON FUNCTION accounts.clan_notice_delete(text, int) TO website;
 
 -- rollback:
 --
--- Drops every clan, notice, invite and clan report, and every facing; the
--- persona's clan and playstyle come back empty. Then re-run, from
+-- Drops every clan, notice (deleted ones too: deleted_at is made with its
+-- table, so the table's drop takes it), invite and clan report, and every
+-- facing; the persona's clan and playstyle come back empty. Then re-run, from
 -- 016_adventure_persona, the CREATE OR REPLACE blocks of
 -- adventure_persona_words, adventure_persona, adventure_persona_save and
 -- staff_adventure_resolve, with their REVOKE and GRANT lines; and from

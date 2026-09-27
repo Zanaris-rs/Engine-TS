@@ -447,7 +447,8 @@ CREATE TABLE "adventure_clan_notice" (
     "author_account_id" INTEGER NOT NULL,
     "title" TEXT NOT NULL,
     "body" TEXT NOT NULL,
-    "created_at" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+    "created_at" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "deleted_at" DATETIME
 );
 
 -- CreateTable
