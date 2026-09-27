@@ -395,15 +395,59 @@ CREATE TABLE "adventure_persona" (
     "title" TEXT NOT NULL DEFAULT '',
     "examine" TEXT NOT NULL DEFAULT '',
     "hangout" TEXT NOT NULL DEFAULT '',
-    "clan" TEXT NOT NULL DEFAULT '',
     "goals" TEXT NOT NULL DEFAULT '[]',
     "god" TEXT,
     "home_town" TEXT,
-    "playstyle" TEXT,
     "scene" TEXT,
+    "facing" INTEGER NOT NULL DEFAULT 0,
     "signature_emote" TEXT,
     "dialogue" TEXT NOT NULL DEFAULT '[]',
     "updated_at" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+-- CreateTable
+CREATE TABLE "adventure_clan" (
+    "id" INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+    "name" TEXT NOT NULL,
+    "slug" TEXT NOT NULL,
+    "motto" TEXT NOT NULL DEFAULT '',
+    "crest" INTEGER NOT NULL,
+    "world" INTEGER,
+    "about" TEXT NOT NULL DEFAULT '',
+    "perm_invite" INTEGER NOT NULL DEFAULT 4,
+    "perm_remove" INTEGER NOT NULL DEFAULT 1,
+    "perm_ranks" INTEGER NOT NULL DEFAULT 1,
+    "perm_page" INTEGER NOT NULL DEFAULT 2,
+    "created_at" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updated_at" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+-- CreateTable
+CREATE TABLE "adventure_clan_member" (
+    "account_id" INTEGER NOT NULL PRIMARY KEY,
+    "clan_id" INTEGER NOT NULL,
+    "rank" TEXT NOT NULL,
+    "joined_at" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+-- CreateTable
+CREATE TABLE "adventure_clan_invite" (
+    "clan_id" INTEGER NOT NULL,
+    "account_id" INTEGER NOT NULL,
+    "invited_by_account_id" INTEGER NOT NULL,
+    "created_at" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    PRIMARY KEY ("clan_id", "account_id")
+);
+
+-- CreateTable
+CREATE TABLE "adventure_clan_notice" (
+    "id" INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+    "clan_id" INTEGER NOT NULL,
+    "author_account_id" INTEGER NOT NULL,
+    "title" TEXT NOT NULL,
+    "body" TEXT NOT NULL,
+    "created_at" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
 -- CreateTable
@@ -600,3 +644,15 @@ CREATE INDEX "adventure_report_resolved_at_created_at_idx" ON "adventure_report"
 
 -- CreateIndex
 CREATE INDEX "adventure_gz_account_id_created_at_idx" ON "adventure_gz"("account_id", "created_at");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "adventure_clan_slug_key" ON "adventure_clan"("slug");
+
+-- CreateIndex
+CREATE INDEX "adventure_clan_member_clan_id_idx" ON "adventure_clan_member"("clan_id");
+
+-- CreateIndex
+CREATE INDEX "adventure_clan_invite_account_id_idx" ON "adventure_clan_invite"("account_id");
+
+-- CreateIndex
+CREATE INDEX "adventure_clan_notice_clan_id_created_at_idx" ON "adventure_clan_notice"("clan_id", "created_at");

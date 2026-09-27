@@ -52,6 +52,41 @@ export type adventure_block = {
     blocked_account_id: number;
     created_at: Generated<Timestamp>;
 };
+export type adventure_clan = {
+    id: Generated<number>;
+    name: string;
+    slug: string;
+    motto: Generated<string>;
+    crest: number;
+    world: number | null;
+    about: Generated<string>;
+    perm_invite: Generated<number>;
+    perm_remove: Generated<number>;
+    perm_ranks: Generated<number>;
+    perm_page: Generated<number>;
+    created_at: Generated<Timestamp>;
+    updated_at: Generated<Timestamp>;
+};
+export type adventure_clan_invite = {
+    clan_id: number;
+    account_id: number;
+    invited_by_account_id: number;
+    created_at: Generated<Timestamp>;
+};
+export type adventure_clan_member = {
+    account_id: number;
+    clan_id: number;
+    rank: string;
+    joined_at: Generated<Timestamp>;
+};
+export type adventure_clan_notice = {
+    id: Generated<number>;
+    clan_id: number;
+    author_account_id: number;
+    title: string;
+    body: string;
+    created_at: Generated<Timestamp>;
+};
 export type adventure_event = {
     id: Generated<number>;
     account_id: number;
@@ -95,12 +130,11 @@ export type adventure_persona = {
     title: Generated<string>;
     examine: Generated<string>;
     hangout: Generated<string>;
-    clan: Generated<string>;
     goals: Generated<string>;
     god: string | null;
     home_town: string | null;
-    playstyle: string | null;
     scene: string | null;
+    facing: Generated<number>;
     signature_emote: string | null;
     dialogue: Generated<string>;
     updated_at: Generated<Timestamp>;
@@ -370,6 +404,10 @@ export type DB = {
     account_look: account_look;
     account_message: account_message;
     adventure_block: adventure_block;
+    adventure_clan: adventure_clan;
+    adventure_clan_invite: adventure_clan_invite;
+    adventure_clan_member: adventure_clan_member;
+    adventure_clan_notice: adventure_clan_notice;
     adventure_event: adventure_event;
     adventure_gz: adventure_gz;
     adventure_log_profile: adventure_log_profile;
