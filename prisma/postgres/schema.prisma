@@ -613,6 +613,34 @@ model adventure_log_profile {
     updated_at DateTime @default(now()) @db.Timestamptz(3)
 }
 
+// The adventurer's persona on their log (016_adventure_persona): the
+// headline's colour and effect, a title, examine, hangout, clan, up to three
+// goals, a god, home town, playstyle and scene (fixed lists the site owns),
+// a signature emote, and up to five pages of dialogue.
+model adventure_persona {
+    account_id Int @id
+
+    headline_colour Int @default(0) @db.SmallInt
+    headline_effect Int @default(0) @db.SmallInt
+
+    title   String @default("")
+    examine String @default("")
+    hangout String @default("")
+    clan    String @default("")
+    // JSON text, like adventure_outfit.kits
+    goals   String @default("[]")
+
+    god             String?
+    home_town       String?
+    playstyle       String?
+    scene           String?
+    signature_emote String?
+    // JSON text: up to five pages of mood, emote and lines
+    dialogue        String  @default("[]")
+
+    updated_at DateTime @default(now()) @db.Timestamptz(3)
+}
+
 // An update the owner posted on their log. Deleted and staff-hidden rows are
 // kept, for reports. edited_at is when the text last changed (015); the
 // earlier text is not kept.

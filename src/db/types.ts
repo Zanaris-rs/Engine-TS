@@ -88,6 +88,23 @@ export type adventure_outfit = {
     is_default: Generated<boolean>;
     updated_at: Generated<Timestamp>;
 };
+export type adventure_persona = {
+    account_id: number;
+    headline_colour: Generated<number>;
+    headline_effect: Generated<number>;
+    title: Generated<string>;
+    examine: Generated<string>;
+    hangout: Generated<string>;
+    clan: Generated<string>;
+    goals: Generated<string>;
+    god: string | null;
+    home_town: string | null;
+    playstyle: string | null;
+    scene: string | null;
+    signature_emote: string | null;
+    dialogue: Generated<string>;
+    updated_at: Generated<Timestamp>;
+};
 export type adventure_reply = {
     id: Generated<number>;
     update_id: number;
@@ -357,6 +374,7 @@ export type DB = {
     adventure_gz: adventure_gz;
     adventure_log_profile: adventure_log_profile;
     adventure_outfit: adventure_outfit;
+    adventure_persona: adventure_persona;
     adventure_reply: adventure_reply;
     adventure_report: adventure_report;
     adventure_update: adventure_update;
