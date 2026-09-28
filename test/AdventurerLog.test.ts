@@ -33,8 +33,11 @@ const MARKER = '-- === functions ===';
 const live = migration.slice(0, migration.indexOf(ROLLBACK));
 const rollback = migration.slice(migration.indexOf(ROLLBACK));
 
+// 013's columns, less the headline that 018_adventure_community dropped
+// (AdventureCommunity.test.ts pins that, and hidden_parts): the backends and
+// schemas are read as they are now.
 const COLUMNS: Record<string, string[]> = {
-    adventure_log_profile: ['account_id', 'headline', 'about', 'custom_css', 'css_disabled_at', 'hidden_categories', 'updated_at'],
+    adventure_log_profile: ['account_id', 'about', 'custom_css', 'css_disabled_at', 'hidden_categories', 'updated_at'],
     adventure_update: ['account_id', 'body', 'created_at', 'deleted_at', 'staff_hidden_at'],
     adventure_reply: ['update_id', 'author_account_id', 'body', 'created_at', 'deleted_at', 'staff_hidden_at'],
     adventure_block: ['owner_account_id', 'blocked_account_id', 'created_at'],
@@ -107,7 +110,8 @@ test('the five tables are in every backend and every schema, with every column',
 });
 
 test('the lengths the website repeats are the ones postgres checks', () => {
-    // lib/adventurer-log/format.ts on the website has the same numbers
+    // lib/adventurer-log/format.ts on the website had the same numbers; 018
+    // took updates and replies to 200 (AdventureCommunity.test.ts pins that)
     assert.ok(migration.includes('CHECK (length("headline") <= 80)'), 'headline');
     assert.ok(migration.includes('CHECK (length("about") <= 1000)'), 'about');
     assert.ok(migration.includes('CHECK (length("custom_css") <= 20000)'), 'css');

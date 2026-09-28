@@ -378,11 +378,11 @@ CREATE TABLE "adventure_outfit" (
 -- CreateTable
 CREATE TABLE "adventure_log_profile" (
     "account_id" INTEGER NOT NULL PRIMARY KEY,
-    "headline" TEXT NOT NULL DEFAULT '',
     "about" TEXT NOT NULL DEFAULT '',
     "custom_css" TEXT NOT NULL DEFAULT '',
     "css_disabled_at" DATETIME,
     "hidden_categories" INTEGER NOT NULL DEFAULT 0,
+    "hidden_parts" INTEGER NOT NULL DEFAULT 0,
     "pinned_update_id" INTEGER,
     "updated_at" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
@@ -390,8 +390,6 @@ CREATE TABLE "adventure_log_profile" (
 -- CreateTable
 CREATE TABLE "adventure_persona" (
     "account_id" INTEGER NOT NULL PRIMARY KEY,
-    "headline_colour" INTEGER NOT NULL DEFAULT 0,
-    "headline_effect" INTEGER NOT NULL DEFAULT 0,
     "title" TEXT NOT NULL DEFAULT '',
     "examine" TEXT NOT NULL DEFAULT '',
     "hangout" TEXT NOT NULL DEFAULT '',

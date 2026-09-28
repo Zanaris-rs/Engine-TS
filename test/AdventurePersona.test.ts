@@ -103,12 +103,14 @@ test('the rollback undoes everything', () => {
 });
 
 // The schemas are read as they are now, after 017_adventure_clans dropped
-// clan and playstyle (AdventureClans.test.ts pins that, and facing).
+// clan and playstyle (AdventureClans.test.ts pins that, and facing) and
+// 018_adventure_community dropped headline_colour and headline_effect
+// (AdventureCommunity.test.ts pins that).
 test('every schema has the table', () => {
     for (const [name, schema] of Object.entries(schemas)) {
         const model = schema.slice(schema.indexOf('model adventure_persona {'));
         assert.ok(schema.includes('model adventure_persona {'), name);
-        for (const column of ['headline_colour', 'headline_effect', 'title', 'examine', 'hangout', 'goals', 'god', 'home_town', 'scene', 'signature_emote', 'dialogue', 'updated_at']) {
+        for (const column of ['title', 'examine', 'hangout', 'goals', 'god', 'home_town', 'scene', 'signature_emote', 'dialogue', 'updated_at']) {
             assert.match(model.slice(0, model.indexOf('}')), new RegExp(`\\b${column}\\b`), `${name}.${column}`);
         }
     }
