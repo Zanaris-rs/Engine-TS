@@ -596,10 +596,10 @@ model adventure_log_profile {
     updated_at DateTime @default(now())
 }
 
-// The adventurer's persona on their log (016_adventure_persona): the
-// headline's colour and effect, a title, examine, hangout, clan, up to three
-// goals, a god, home town, playstyle and scene (fixed lists the site owns),
-// a signature emote, and up to five pages of dialogue.
+// The adventurer's persona on their log (016_adventure_persona, 017): the
+// headline's colour and effect, a title, examine, hangout, up to three goals,
+// a god, home town and scene (fixed lists the site owns), the way the figure
+// faces (0..15), a signature emote, and up to five pages of dialogue.
 model adventure_persona {
     account_id Int @id
 
@@ -609,19 +609,86 @@ model adventure_persona {
     title   String @default("")
     examine String @default("")
     hangout String @default("")
-    clan    String @default("")
     // JSON text, like adventure_outfit.kits
     goals   String @default("[]")
 
     god             String?
     home_town       String?
-    playstyle       String?
     scene           String?
+    facing          Int     @default(0)
     signature_emote String?
     // JSON text: up to five pages of mood, emote and lines
     dialogue        String  @default("[]")
 
     updated_at DateTime @default(now())
+}
+
+// A clan (017_adventure_clans): invite-only, one clan per player. The name
+// (letters, digits and single spaces, 1..20) and its slug (lower-cased,
+// spaces to '-') are unique; the crest is any item id; the world is optional.
+// perm_* are the Leader's "who can..." thresholds, as rank levels: a member
+// may when their rank's level is at most it (0 the Leader only, 6 everyone).
+model adventure_clan {
+    id Int @id @default(autoincrement())
+
+    name  String
+    slug  String @unique
+    motto String @default("")
+    crest Int
+    world Int?
+    about String @default("")
+
+    perm_invite Int @default(4)
+    perm_remove Int @default(1)
+    perm_ranks  Int @default(1)
+    perm_page   Int @default(2)
+
+    created_at DateTime @default(now())
+    updated_at DateTime @default(now())
+}
+
+// A clan's members. The key is the account, so a player is in one clan at
+// most. rank is the clan-chat ladder, 'leader' .. 'recruit'; one leader per
+// clan is a partial unique index, in postgres only.
+model adventure_clan_member {
+    account_id Int @id
+
+    clan_id Int
+    rank    String
+
+    joined_at DateTime @default(now())
+
+    @@index([clan_id])
+}
+
+// A pending invite to a clan. Invites don't expire; accepting, declining or
+// cancelling deletes the row.
+model adventure_clan_invite {
+    clan_id               Int
+    account_id            Int
+    invited_by_account_id Int
+
+    created_at DateTime @default(now())
+
+    @@id([clan_id, account_id])
+    @@index([account_id])
+}
+
+// A notice on a clan's page, from Captain and up by default. The newest
+// twenty are kept. Deleting one sets deleted_at: it keeps its place in the
+// clan's ten a day, and goes for good once its day is over.
+model adventure_clan_notice {
+    id Int @id @default(autoincrement())
+
+    clan_id           Int
+    author_account_id Int
+    title             String
+    body              String
+
+    created_at DateTime  @default(now())
+    deleted_at DateTime?
+
+    @@index([clan_id, created_at])
 }
 
 // An update the owner posted on their log. Deleted and staff-hidden rows are
@@ -680,10 +747,10 @@ model adventure_gz {
     @@index([account_id, created_at])
 }
 
-// A report of an update, a reply or a whole log, for staff. One open report
-// per reporter per target is a partial unique index, in postgres only.
-// target_kind: 'update' | 'reply' | 'log'; resolution: 'hidden' |
-// 'css_disabled' | 'dismissed'.
+// A report of an update, a reply, a whole log or a clan (017), for staff.
+// One open report per reporter per target is a partial unique index, in
+// postgres only. target_kind: 'update' | 'reply' | 'log' | 'clan';
+// resolution: 'hidden' | 'css_disabled' | 'dismissed'.
 model adventure_report {
     id Int @id @default(autoincrement())
 
