@@ -30,7 +30,9 @@ import Obj from '#/engine/entity/Obj.js';
 import PathingEntity from '#/engine/entity/PathingEntity.js';
 import { PlayerLoading } from '#/engine/entity/PlayerLoading.js';
 import { PlayerQueueRequest, PlayerQueueType, QueueType, ScriptArgument } from '#/engine/entity/PlayerQueueRequest.js';
-import { PlayerStat, PlayerStatEnabled, PlayerStatFree, PlayerStatNameMap } from '#/engine/entity/PlayerStat.js';
+import { levelUpLines } from '#/engine/entity/LevelUpLines.js';
+import { PlayerStat } from '#/engine/entity/PlayerStat.js';
+import { ADVENTURE_BUFFER_MAX, ADVENTURE_EVENT_MAX, type AdventureBatch, type AdventureEvent } from '#/engine/entity/tracking/AdventureEvent.js';
 import InputTracking from '#/engine/entity/tracking/InputTracking.js';
 import { WealthEventParams } from '#/engine/entity/tracking/WealthEvent.js';
 import { changeNpcCollision, changePlayerOccCollision, findNaivePath, reachedEntity, reachedLoc, reachedObj } from '#/engine/GameMap.js';
@@ -306,12 +308,16 @@ export default class Player extends PathingEntity {
     tradeDuel: ChatModeTradeDuel = ChatModeTradeDuel.ON;
 
     session: string = 'headless';
+    /** Adventurer Log lines not yet handed to a save (see addSessionLog). */
+    adventure: AdventureEvent[] = [];
+    private adventureSeq: number = 0;
     input: InputTracking;
 
     slot: number = -1;
     uid: number = -1;
     reconnecting: boolean = false;
     lowMemory: boolean = false;
+    /** Set at load time when the socket is a WSClientSocket. See `clientKind`. */
     webClient: boolean = false;
     combatLevel: number = 3;
     skillLevel: number = 0;
@@ -389,8 +395,18 @@ export default class Player extends PathingEntity {
     members: boolean = true;
     messageCount: number = 0;
 
+    // set from the login reply; -1 when there is no login server behind us
+    account_id: number = -1;
+
     socialProtect: boolean = false; // social packet spam protection
     reportAbuseProtect: boolean = false; // social packet spam protection
+
+    // Wall clock of the last abuse report that was actually written.
+    // reportAbuseProtect above only survives one tick - resetEntity clears it -
+    // which made Report Abuse an insert into `report` every 600ms for a client
+    // willing to send it. 0 is "never reported", which is always outside the
+    // window; a relog starts a fresh one, and the hop timer already caps that.
+    lastReportAbuse: number = 0;
 
     lastLoginTime: bigint = 0n;
 
@@ -464,7 +480,7 @@ export default class Player extends PathingEntity {
         this.lastAppearance = 0;
         this.appearanceBuf = null;
         this.isActive = false;
-        this.input.flush();
+        this.input.cleanup();
     }
 
     resetEntity(respawn: boolean) {
@@ -647,6 +663,28 @@ export default class Player extends PathingEntity {
 
     addSessionLog(event_type: LoggerEventType, message: string, ...args: string[]): void {
         World.addSessionLog(event_type, this.session, CoordGrid.packCoord(this.level, this.x, this.z), message, ...args);
+
+        // The Adventurer Log's copy, kept until a save takes it to the login
+        // server (World.savePlayers, World.flushPlayer). A headless player has
+        // no account to log to.
+        if (event_type === LoggerEventType.ADVENTURE && this.session !== 'headless' && this.adventure.length < ADVENTURE_BUFFER_MAX) {
+            this.adventure.push({
+                seq: this.adventureSeq++,
+                timestamp: Date.now(),
+                event: (args.length ? message + ' ' + args.join(' ') : message).slice(0, ADVENTURE_EVENT_MAX)
+            });
+        }
+    }
+
+    /**
+     * The Adventurer Log lines since the last save, handed over with the save
+     * about to be sent. The seq keeps counting, so a line never shares its
+     * (session, seq) with another.
+     */
+    takeAdventure(): AdventureBatch {
+        const batch = { session: this.session, events: this.adventure };
+        this.adventure = [];
+        return batch;
     }
 
     addWealthEvent(event: WealthEventParams) {
@@ -1317,6 +1355,16 @@ export default class Player extends PathingEntity {
         this.input.onCycle();
     }
 
+    /**
+     * Which client this player is on, as `report_input.client` records it. It
+     * matters to whoever reads the evidence: the Java client only ever sends
+     * one move record per packet, so the spatial signals a macro verdict leans
+     * on are not available for it.
+     */
+    get clientKind(): 'web' | 'java' {
+        return this.webClient ? 'web' : 'java';
+    }
+
     // ----
 
     getAppearanceInSlot(slot: number) {
@@ -1850,34 +1898,9 @@ export default class Player extends PathingEntity {
 
             this.changeStat(stat);
 
-            // fun logging for players :)
-            this.addSessionLog(LoggerEventType.ADVENTURE, 'Levelled up ' + PlayerStatNameMap.get(stat)?.toLowerCase() + ' from ' + before + ' to ' + this.baseLevels[stat]);
-
-            let total = 0;
-            let freeTotal = 0;
-            for (let stat = 0; stat < this.baseLevels.length; stat++) {
-                if (!PlayerStatEnabled[stat]) {
-                    continue;
-                }
-
-                total += this.baseLevels[stat];
-
-                if (PlayerStatFree[stat]) {
-                    freeTotal += this.baseLevels[stat];
-                }
-            }
-
-            const milestone = 250; // Level milestones = multiple of this number (should be >= 100)
-            const prevMilestone = ((total - (this.baseLevels[stat] - before)) / milestone) | 0;
-            const currMilestone = (total / milestone) | 0;
-            if (currMilestone > prevMilestone) {
-                this.addSessionLog(LoggerEventType.ADVENTURE, `Reached total level ${currMilestone * milestone}`);
-            }
-            if (total === 1881) {
-                this.addSessionLog(LoggerEventType.ADVENTURE, 'Reached total level 1881 - you beat p2p!');
-            }
-            if (freeTotal === 1485) {
-                this.addSessionLog(LoggerEventType.ADVENTURE, 'Reached total level 1485 - you beat f2p!');
+            // fun logging for players :) - and the Adventurer Log's levels
+            for (const line of levelUpLines(stat, before, this.baseLevels)) {
+                this.addSessionLog(LoggerEventType.ADVENTURE, line);
             }
 
             const script = ScriptProvider.getByTriggerSpecific(ServerTriggerType.ADVANCESTAT, stat, -1);

@@ -3,6 +3,7 @@ import fs from 'fs';
 import { ConfigType } from '#/cache/config/ConfigType.js';
 import Jagfile from '#/io/Jagfile.js';
 import Packet from '#/io/Packet.js';
+import AnimBase from '#/cache/graphics/AnimBase.js';
 import AnimFrame from '#/cache/graphics/AnimFrame.js';
 
 export default class SeqType extends ConfigType {
@@ -21,7 +22,19 @@ export default class SeqType extends ConfigType {
 
         const server = Packet.load(`${dir}/server/seq.dat`);
         const jag = Jagfile.load(`${dir}/client/config`);
-        this.parse(server, jag);
+
+        try {
+            this.parse(server, jag);
+        } finally {
+            // decodeType has copied the only field anything reads - a frame's
+            // `delay`, for seqlength - into SeqType.delay. Release the ~14.5MB of
+            // frame geometry behind it; the guard above re-loads it if reload()
+            // runs again.
+            AnimFrame.instances = [];
+            AnimFrame.order = [];
+            AnimBase.instances = [];
+            AnimBase.order = [];
+        }
     }
 
     static parse(server: Packet, jag: Jagfile) {

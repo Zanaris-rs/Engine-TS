@@ -1,0 +1,6 @@
+{
+    "_comment": "The password hashing contract shared by engine/ and Website/. Both sides hash bcrypt(password.toLowerCase(), cost 10) and must verify this hash, or every account created on one side is unloggable on the other - silently, at login, far from the code that caused it.",
+    "password": "Hunter2",
+    "hash": "$2b$10$h7SFpTUnffSF8qbPhpFbpuZNSudppriU5kHCTNPw5o.l0dHgIDKCS",
+    "cost": 10
+}

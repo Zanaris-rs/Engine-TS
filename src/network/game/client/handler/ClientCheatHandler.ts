@@ -29,12 +29,20 @@ import ScriptRunner from '#/engine/script/ScriptRunner.js';
 
 import ClientGameMessageHandler from '#/network/game/client/ClientGameMessageHandler.js';
 import ClientCheat from '#/network/game/client/model/ClientCheat.js';
+import { ReportAbuseReason } from '#/network/game/client/model/ReportAbuse.js';
 
 import { LoggerEventType } from '#/server/logger/LoggerEventType.js';
 
 import Environment from '#/util/Environment.js';
+import { toSafeName } from '#/util/JString.js';
 import { printDebug } from '#/util/Logger.js';
 import { tryParseInt } from '#/util/TryParse.js';
+
+/** `::track <name>` with no number. Long enough to see a pattern, short enough to forget about. */
+const TRACK_DEFAULT_MINUTES = 15;
+
+/** ...and the most a moderator may ask for in one go. See the note at the call. */
+const TRACK_MAX_MINUTES = 60;
 
 export default class ClientCheatHandler extends ClientGameMessageHandler<ClientCheat> {
     handle(message: ClientCheat, player: Player): boolean {
@@ -351,7 +359,13 @@ export default class ClientCheatHandler extends ClientGameMessageHandler<ClientC
                 }
 
                 const count = Math.max(1, Math.min(tryParseInt(args[1], 1), 0x7fffffff));
-                player.invAdd(InvType.INV, obj, count);
+                // what invAdd returns, not what was asked for: a backpack with
+                // four free slots takes four of the ten, and the economy page
+                // is counting items that exist rather than items requested.
+                // Zero means the inventory was full and nothing entered the
+                // game, so there is nothing to log.
+                const added = player.invAdd(InvType.INV, obj, count);
+                World.notifyStaffSpawn(player, player, obj, added);
             } else if (cmd === 'giveother' && Environment.node.production) {
                 // custom
                 if (args.length < 2) {
@@ -371,7 +385,8 @@ export default class ClientCheatHandler extends ClientGameMessageHandler<ClientC
                 }
 
                 const count = Math.max(1, Math.min(tryParseInt(args[2], 1), 0x7fffffff));
-                other.invAdd(InvType.INV, obj, count);
+                const added = other.invAdd(InvType.INV, obj, count);
+                World.notifyStaffSpawn(player, other, obj, added);
             } else if (cmd === 'givecrap') {
                 // authentic (we don't know the exact specifics of this...)
 
@@ -386,7 +401,11 @@ export default class ClientCheatHandler extends ClientGameMessageHandler<ClientC
                         }
                     }
 
-                    player.invAdd(InvType.INV, random, 1);
+                    // up to 28 messages, one per item that actually landed:
+                    // the loop runs 28 times whether or not the backpack had
+                    // 28 free slots to take them
+                    const added = player.invAdd(InvType.INV, random, 1);
+                    World.notifyStaffSpawn(player, player, random, added);
                 }
             } else if (cmd === 'givemany') {
                 // authentic
@@ -401,7 +420,8 @@ export default class ClientCheatHandler extends ClientGameMessageHandler<ClientC
                     return false;
                 }
 
-                player.invAdd(InvType.INV, obj, 1000);
+                const added = player.invAdd(InvType.INV, obj, 1000);
+                World.notifyStaffSpawn(player, player, obj, added);
             } else if (cmd === 'broadcast' && Environment.node.production) {
                 // custom
                 if (args.length < 0) {
@@ -679,6 +699,68 @@ export default class ClientCheatHandler extends ClientGameMessageHandler<ClientC
                     player.messageGame(`Player '${args[0]}' has been kicked from the game.`);
                 } else {
                     player.messageGame(`Player '${args[0]}' does not exist or is not logged in.`);
+                }
+            } else if (cmd === 'track') {
+                // custom: watch somebody's mouse without waiting for a player
+                // to report them. Not production-gated like its neighbours -
+                // this is the one command a developer needs on a dev world to
+                // see the capture path work end to end.
+                if (args.length < 1) {
+                    // ::track <username> [minutes]
+                    player.messageGame('Usage: ::track <username> [minutes], 0 to stop');
+                    return false;
+                }
+
+                // the same key Report Abuse and a relayed track use:
+                // fromBase37 hands those two a safe name, and a moderator typing
+                // 'Mod Matt' must land on the same capture as they do or the
+                // dedupe opens a second one over the same minutes
+                const username = toSafeName(args[0]);
+
+                // An hour. The old ceiling was a day, which is not a watch -
+                // it is a recording, at up to a chunk a minute per offender,
+                // held open by a moderator who typed a number and went to bed.
+                // A macro report watches for fifteen minutes and a relayed
+                // track for thirty; an hour is already four times the first and
+                // twice the second, and a watch worth more than that is worth
+                // typing `::track` again.
+                const minutes = args.length > 1 ? Math.min(TRACK_MAX_MINUTES, Math.max(0, tryParseInt(args[1], TRACK_DEFAULT_MINUTES))) : TRACK_DEFAULT_MINUTES;
+
+                if (minutes === 0) {
+                    if (World.stopInputCapture(username)) {
+                        player.messageGame(`No longer tracking '${username}'.`);
+                    } else {
+                        player.messageGame(`'${username}' was not being tracked.`);
+                    }
+
+                    return true;
+                }
+
+                if (!World.getPlayerByUsername(username)) {
+                    // filing the report anyway would leave a row on
+                    // /staff/reports with nothing behind it
+                    player.messageGame(`Player '${username}' does not exist or is not logged in.`);
+                    return false;
+                }
+
+                // through the report path, not around it: the point is that the
+                // evidence turns up on /staff/reports like any other macro
+                // report, with this moderator's name on it as the reporter
+                const capture = World.notifyPlayerReport(player, username, ReportAbuseReason.MACROING, minutes * 60 * 1000);
+
+                if (!capture) {
+                    player.messageGame(`Could not start a capture on '${username}'.`);
+                    return false;
+                }
+
+                const remaining = Math.max(1, Math.round((capture.endsAt - Date.now()) / 60000));
+
+                if (capture.started) {
+                    player.messageGame(`Tracking '${username}' for ${remaining} minutes.`);
+                } else if (capture.extended) {
+                    player.messageGame(`Already tracking '${username}' - window extended to ${remaining} minutes.`);
+                } else {
+                    player.messageGame(`Already tracking '${username}', for another ${remaining} minutes.`);
                 }
             }
         }

@@ -22,6 +22,6 @@
     "esModuleInterop": true,
     "allowUnreachableCode": true
   },
-  "include": ["src/**/*.ts", "src/**/*.js", "tools/**/*.ts", "tools/**/*.js"],
+  "include": ["src/**/*.ts", "src/**/*.js", "tools/**/*.ts", "tools/**/*.js", "test/**/*.ts"],
   "exclude": ["node_modules", "<node_internals>/**"]
 }

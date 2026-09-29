@@ -1,0 +1,188 @@
+{
+    "_comment": "The input-tracking framing shared by engine/ and Website/. The engine writes report_input.data in this framing and the website is the only thing that reads it back; this file is copied verbatim into the website, whose decoder must turn `chunk.data` into exactly `events`. Records: a one-byte type then a big-endian payload - 1 camera (p2 pitch, p2 yaw), 2 applet focus (p1), 3 mouse click (p4, the client word (delta50ms << 20) | (button << 19) | (y * 765 + x)), 4 mouse move (p1 length then the 2/3/4-byte cursor encoding the client writes), 5 time anchor (p2 ticks since the chunk began), 6 marker (p1 reason). Timing: `t` is milliseconds from `chunk.started_at`; a time anchor sets the arrival clock to ticks * 600; camera, focus, click and marker records take the arrival clock in force; a move record has samples that END at it, so sample k of the N samples the record accounts for sits at T - (N - 1 - k) * 50, where an encoded step accounts for delta + 1 samples (delta where the cursor did not move, then the one where it did). A move step is relative until an absolute one has been seen, so x and y are null until then; pos 524287 means the cursor left the applet and decodes as (-1, -1). This chunk is a real one: seventeen one-record chunks were rotated through the sixteen-chunk ring first, which is why it opens with marker 3. Markers 2 and 4 were written directly - the flood cap needs 8 KB of input and the live tail needs a report - so a decoder must handle a marker anywhere in a chunk, not only at its head.",
+    "records": {
+        "camera_position": 1,
+        "applet_focus": 2,
+        "mouse_click": 3,
+        "mouse_move": 4,
+        "time_anchor": 5,
+        "marker": 6
+    },
+    "markers": {
+        "move_packet_dropped": 1,
+        "flood_cap": 2,
+        "ring_wrapped": 3,
+        "live_tail_begins": 4
+    },
+    "limits": {
+        "chunk_size_bytes": 1500,
+        "chunk_age_ms": 60000,
+        "ring_capacity": 16,
+        "move_payload_bytes": 255,
+        "flood_window_ticks": 100,
+        "flood_budget_bytes": 8192
+    },
+    "client": {
+        "tick_ms": 600,
+        "sample_ms": 50,
+        "screen_width": 765,
+        "screen_height": 503,
+        "offscreen_pos": 524287,
+        "click_delta_max": 4095,
+        "move_delta_max": 2047
+    },
+    "chunk": {
+        "seq": 17,
+        "started_at": 1788610620000,
+        "flushed_at": 1788610680000,
+        "client": "web",
+        "data": "BgMFAAACAQQTCqwIooOBRMBDkDqH//+ErHwH3wUAAwMBQJXOBQAGAQCABAAEBDrrCGED//3fGgUACQYBBQAKBgIFAAwGBAIA"
+    },
+    "events": [
+        {
+            "type": "marker",
+            "t": 0,
+            "reason": 3
+        },
+        {
+            "type": "anchor",
+            "t": 0,
+            "ticks": 0
+        },
+        {
+            "type": "focus",
+            "t": 0,
+            "focus": 1
+        },
+        {
+            "type": "move",
+            "t": -700,
+            "delta": 0,
+            "x": null,
+            "y": null
+        },
+        {
+            "type": "move",
+            "t": -650,
+            "delta": 0,
+            "x": null,
+            "y": null
+        },
+        {
+            "type": "move",
+            "t": -600,
+            "delta": 0,
+            "x": 200,
+            "y": 300
+        },
+        {
+            "type": "move",
+            "t": -150,
+            "delta": 8,
+            "x": 205,
+            "y": 305
+        },
+        {
+            "type": "move",
+            "t": -100,
+            "delta": 0,
+            "x": -1,
+            "y": -1
+        },
+        {
+            "type": "move",
+            "t": -50,
+            "delta": 0,
+            "x": 300,
+            "y": 400
+        },
+        {
+            "type": "move",
+            "t": 0,
+            "delta": 0,
+            "x": 299,
+            "y": 399
+        },
+        {
+            "type": "anchor",
+            "t": 1800,
+            "ticks": 3
+        },
+        {
+            "type": "click",
+            "t": 1800,
+            "delta": 20,
+            "button": 0,
+            "x": 100,
+            "y": 50
+        },
+        {
+            "type": "anchor",
+            "t": 3600,
+            "ticks": 6
+        },
+        {
+            "type": "camera",
+            "t": 3600,
+            "pitch": 128,
+            "yaw": 1024
+        },
+        {
+            "type": "move",
+            "t": 3550,
+            "delta": 3,
+            "x": 310,
+            "y": 410
+        },
+        {
+            "type": "move",
+            "t": 3600,
+            "delta": 0,
+            "x": 311,
+            "y": 411
+        },
+        {
+            "type": "click",
+            "t": 3600,
+            "delta": 4095,
+            "button": 1,
+            "x": 764,
+            "y": 502
+        },
+        {
+            "type": "anchor",
+            "t": 5400,
+            "ticks": 9
+        },
+        {
+            "type": "marker",
+            "t": 5400,
+            "reason": 1
+        },
+        {
+            "type": "anchor",
+            "t": 6000,
+            "ticks": 10
+        },
+        {
+            "type": "marker",
+            "t": 6000,
+            "reason": 2
+        },
+        {
+            "type": "anchor",
+            "t": 7200,
+            "ticks": 12
+        },
+        {
+            "type": "marker",
+            "t": 7200,
+            "reason": 4
+        },
+        {
+            "type": "focus",
+            "t": 7200,
+            "focus": 0
+        }
+    ]
+}

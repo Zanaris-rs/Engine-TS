@@ -5,6 +5,7 @@ import { PlayerStat } from '#/engine/entity/PlayerStat.js';
 import World from '#/engine/World.js';
 import Packet from '#/io/Packet.js';
 import ClientSocket from '#/server/ClientSocket.js';
+import WSClientSocket from '#/server/ws/WSClientSocket.js';
 import { fromBase37, toBase37 } from '#/util/JString.js';
 
 export class PlayerLoading {
@@ -32,6 +33,11 @@ export class PlayerLoading {
         const safeName = fromBase37(name37); // always safe username.
 
         const player = client ? new NetworkPlayer(safeName, name37, hash64, client) : new Player(safeName, name37, hash64);
+
+        // the one place the socket and the player meet: which client this is
+        // has to be recorded on the evidence, and nothing downstream can see
+        // the socket to work it out later
+        player.webClient = client instanceof WSClientSocket;
 
         player.lastConnected = World.currentTick;
         player.lastResponse = World.currentTick;

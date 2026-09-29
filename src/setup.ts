@@ -73,9 +73,21 @@ async function runProcess(command: string, args: string[], env: NodeJS.ProcessEn
     });
 }
 
+function schemaForBackend(backend: string): string {
+    if (backend === 'sqlite') {
+        return 'prisma/singleworld/schema.prisma';
+    }
+
+    if (backend === 'postgres') {
+        return 'prisma/postgres/schema.prisma';
+    }
+
+    return 'prisma/multiworld/schema.prisma';
+}
+
 async function runSetupMigration(backend: string): Promise<void> {
     const config = loadWorldConfig();
-    const schema = backend === 'sqlite' ? 'prisma/singleworld/schema.prisma' : 'prisma/multiworld/schema.prisma';
+    const schema = schemaForBackend(backend);
     const prismaCli = path.join(process.cwd(), 'node_modules', 'prisma', 'build', 'index.js');
     const command = process.execPath;
     const args = [prismaCli, 'migrate', 'deploy', '--schema', schema];
@@ -131,7 +143,9 @@ async function handleManagementRequest(req: Request): Promise<Response> {
             saveWorldConfig(config);
 
             const hasSupportServer = config.login.enabled || config.friend.enabled || config.logger.enabled;
-            const shouldRunMigration = hasSupportServer && config.db.host.trim().toLowerCase() === 'localhost';
+            // postgres is never migrated from here: 000_init creates roles and grants,
+            // so it is run deliberately with `npm run postgres:migrate`
+            const shouldRunMigration = hasSupportServer && config.db.backend !== 'postgres' && config.db.host.trim().toLowerCase() === 'localhost';
             if (shouldRunMigration) {
                 try {
                     await runSetupMigration(config.db.backend);

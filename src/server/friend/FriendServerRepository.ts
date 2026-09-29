@@ -228,7 +228,7 @@ export class FriendServerRepository {
             .executeTakeFirst();
         const limit = account.members ? 200 : 100;
 
-        if (list && (list.count as number) >= limit) {
+        if (list && Number(list.count) >= limit) {
             return;
         }
 
@@ -267,7 +267,7 @@ export class FriendServerRepository {
             .select(({ fn }) => fn.countAll().as('count'))
             .executeTakeFirst();
 
-        if (list && (list.count as number) >= 100) {
+        if (list && Number(list.count) >= 100) {
             return;
         }
 
@@ -281,7 +281,7 @@ export class FriendServerRepository {
 
         // todo: resolve this when kyseley 0.28 releases .ignore()
         //       https://github.com/kysely-org/kysely/issues/916
-        if (Environment.db.backend === 'sqlite') {
+        if (Environment.db.backend === 'sqlite' || Environment.db.backend === 'postgres') {
             query = query.onConflict(oc => oc.doNothing());
         } else if (Environment.db.backend === 'mysql') {
             query = query.onDuplicateKeyUpdate({
