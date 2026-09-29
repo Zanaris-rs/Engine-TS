@@ -105,11 +105,11 @@ export type adventure_gz = {
 };
 export type adventure_log_profile = {
     account_id: number;
-    headline: Generated<string>;
     about: Generated<string>;
     custom_css: Generated<string>;
     css_disabled_at: Timestamp | null;
     hidden_categories: Generated<number>;
+    hidden_parts: Generated<number>;
     pinned_update_id: number | null;
     updated_at: Generated<Timestamp>;
 };
@@ -126,8 +126,6 @@ export type adventure_outfit = {
 };
 export type adventure_persona = {
     account_id: number;
-    headline_colour: Generated<number>;
-    headline_effect: Generated<number>;
     title: Generated<string>;
     examine: Generated<string>;
     hangout: Generated<string>;
